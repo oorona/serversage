@@ -1,0 +1,15 @@
+ #File: requirements.txt
+
+# Discord Bot Core Library
+discord.py~=2.3.2
+
+# HTTP Requests for LLM API (and general HTTP needs if not using aiohttp/httpx extensively elsewhere)
+requests~=2.31.0
+
+# Asynchronous HTTP client (recommended for async LLM calls)
+httpx~=0.27.0
+
+# Environment Variable Management & Settings Validation
+python-dotenv~=1.0.1
+pydantic~=2.7.1
+pydantic-settings~=2.2.1

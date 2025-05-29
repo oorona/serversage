@@ -1,0 +1,40 @@
+# File: docker-compose.yml
+services:
+  welcomeai:
+    build: . # Build the image from the Dockerfile in the current directory
+    container_name: welcomeai # Optional: give the container a specific name
+    
+    env_file:
+      - .env # Load environment variables from the .env file in the project root
+      
+    volumes:
+      # Mount the local ./data directory to /app/data in the container
+      # This persists the categorized_roles.json file outside the container.
+      - ./data:/app/data 
+      
+      # Mount the local ./logs directory to /app/logs in the container
+      # This persists log files outside the container if file logging is enabled.
+      - ./logs:/app/logs
+      
+    restart: unless-stopped # Restart policy: restarts unless explicitly stopped or on error
+    # Other restart policies: "no", "on-failure", "always"
+
+    # Optional: Add healthcheck if your bot has a way to report health
+    # healthcheck:
+    #   test: ["CMD", "your_healthcheck_command_or_script"] # e.g., a simple ping or custom script
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    networks:
+      - llmnet
+
+    # Optional: Logging driver configuration for Docker itself
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "10m" # Max size of log files before rotation
+    #     max-file: "3"   # Number of log files to keep
+
+networks: # Optional: define a default network if you plan to link other services
+  llmnet:
+    external: true
