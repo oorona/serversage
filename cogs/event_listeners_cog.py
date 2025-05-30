@@ -210,7 +210,8 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
                     welcome_message_content = await self.llm_client.generate_welcome_message(
                         member_name=member.display_name,
                         server_name=member.guild.name,
-                        welcome_prompt_template=prompt_template
+                        member_id=member.id,
+                        welcome_prompt_template_str=prompt_template
                     )
                     try:
                         await welcome_channel.send(welcome_message_content)

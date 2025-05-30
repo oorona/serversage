@@ -327,36 +327,48 @@ class LLMClient:
 
     # Ensure this method is part of the LLMClient class
 
-    async def generate_welcome_message(self, member_name: str, server_name: str, welcome_prompt_template: str) -> str:
-        logger.info(f"Generating welcome message for {member_name} in {server_name}")
+    async def generate_welcome_message(self, member_name: str, server_name: str, member_id: int, welcome_prompt_template_str: str) -> str:
+        logger.info(f"Generating welcome message for '{member_name}' in server '{server_name}'")
         
-        # Replace placeholders in the prompt template
+        system_message_content: Optional[str] = None
         try:
-            formatted_prompt = welcome_prompt_template.format(member_name=member_name, server_name=server_name)
+            # Using .format() here is fine for simple substitutions like server_name
+            system_message_content = welcome_prompt_template_str.format(server_name=server_name, member_name=member_name, member_id=member_id)
         except KeyError as e:
-            logger.error(f"Placeholder {e} missing in welcome_prompt_template. Using basic fallback.")
-            # Provide a very generic prompt if template formatting fails
-            formatted_prompt = f"Generate a warm and friendly welcome message for a new user named {member_name} who has just joined the Discord server named {server_name}."
+            logger.error(f"Placeholder {e} missing in welcome_prompt_template (expected {{server_name}}). Using generic system prompt.")
+            # Fallback system prompt if template is misconfigured or key is missing
+            system_message_content = (
+                "You are a friendly AI assistant. Generate a short, enthusiastic welcome message for a new Discord user. "
+                "Acknowledge them by name and mention they might get a DM for role assignment."
+            )
+        except Exception as e:
+            logger.error(f"Error formatting system prompt for welcome message: {e}", exc_info=True)
+            system_message_content = "You are a friendly AI assistant. Generate a welcome message." # Basic fallback
+
+        # 2. Prepare the user message with the specific trigger and dynamic info
+        user_message_content = f"A new user named '{member_name}' has just joined the server. Please generate their welcome message."
+
+        # 3. Construct the messages list
+        messages = [
+            {"role": "system", "content": system_message_content},
+            {"role": "user", "content": user_message_content}
+        ]
         
-        messages = [{"role": "user", "content": formatted_prompt}]
+        # 4. Call the LLM
+        # Temperature might be slightly higher for a more creative/friendly welcome message
+        llm_response_data = await self._make_llm_request(messages, temperature=0.7, max_tokens=150) # Adjusted max_tokens for a short welcome
         
-        # Call the LLM
-        llm_response_data = await self._make_llm_request(messages, temperature=0.8, max_tokens=256) 
-        
-        # Define a sensible fallback message
+        # 5. Define a sensible fallback message
         fallback_text = f"Welcome to {server_name}, {member_name}! We're excited to have you here. You might receive a DM shortly to help assign some initial roles."
 
         if llm_response_data:
-            response_content = None
+            response_content_str: Optional[str] = None
             try:
                 # Try to extract content based on common LLM response structures
-                # 1. Direct message content (e.g., some OpenWebUI/Ollama direct responses)
                 if "message" in llm_response_data and \
                    isinstance(llm_response_data["message"], dict) and \
                    "content" in llm_response_data["message"]:
-                    response_content = llm_response_data["message"]["content"]
-                
-                # 2. OpenAI-compatible structure (choices array)
+                    response_content_str = llm_response_data["message"]["content"]
                 elif "choices" in llm_response_data and \
                      isinstance(llm_response_data.get("choices"), list) and \
                      len(llm_response_data["choices"]) > 0 and \
@@ -364,21 +376,20 @@ class LLMClient:
                      "message" in llm_response_data["choices"][0] and \
                      isinstance(llm_response_data["choices"][0].get("message"), dict) and \
                      "content" in llm_response_data["choices"][0]["message"]:
-                    response_content = llm_response_data["choices"][0]["message"]["content"]
-                
+                    response_content_str = llm_response_data["choices"][0]["message"]["content"]
                 else:
                     logger.error(f"Unexpected LLM response structure for welcome message: {llm_response_data}")
 
-                # Now, check if content was extracted and is not None before stripping
-                if response_content is not None:
-                    return response_content.strip()
+                if response_content_str is not None and isinstance(response_content_str, str):
+                    # LLMs might sometimes still include the user's name or other parts of the prompt
+                    # if not explicitly told to only return the message. We'll assume it's good for now.
+                    return response_content_str.strip()
                 else:
-                    logger.warning(f"LLM response content for welcome message was null. Data: {llm_response_data}")
+                    logger.warning(f"LLM response content for welcome message was None or not a string. Data: {llm_response_data}")
 
-            except Exception as e: # Catch any other parsing errors (KeyError, IndexError, etc.)
+            except Exception as e:
                 logger.error(f"Error processing LLM response content for welcome message: {e}", exc_info=True)
                 logger.debug(f"Problematic LLM response data for welcome message: {llm_response_data}")
         
-        # If llm_response_data was None, or content was None, or an error occurred during processing:
         logger.warning("Failed to generate LLM welcome message or content was null/invalid, using fallback.")
         return fallback_text

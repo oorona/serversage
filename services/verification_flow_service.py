@@ -59,85 +59,67 @@ class VerificationFlowService:
     async def start_verification_process(self, member: discord.Member, interaction: Optional[discord.Interaction] = None):
         logger.info(f"SVC_START: Attempting to start/update verification for: {member.name} (ID: {member.id})")
 
-        if member.bot:
-            logger.info(f"SVC_START: Member {member.name} is a bot, skipping.")
+        if member.bot: # Standard initial checks
+            logger.info(f"SVC_START: Member {member.name} is a bot, skipping verification.")
             if interaction and not interaction.response.is_done():
                  await interaction.response.send_message("Bots do not require verification.", ephemeral=True)
             return
 
+        verified_role = member.guild.get_role(self.settings.VERIFIED_ROLE_ID)
+        if verified_role and verified_role in member.roles: # User is already fully verified
+            # For an update session triggered by /assign-roles, we still proceed if already verified.
+            # The 'is_update_session' flag will handle the flow.
+            # However, if this is on_member_join, and they are already verified, we might stop.
+            # For now, /assign-roles should always allow an update attempt.
+            # The check for active_verifications below handles concurrent sessions.
+            logger.info(f"SVC_START: User {member.name} is already verified. Proceeding as update session if from /assign-roles.")
+        
         if member.id in self.active_verifications:
             logger.info(f"SVC_START: Verification process already active for {member.name}.")
             msg_content = f"A verification process is already underway for you, {member.mention}. Please check your DMs."
             if interaction and not interaction.response.is_done():
                 await interaction.response.send_message(msg_content, ephemeral=True)
-            else: # This case is less likely if DMs are ongoing, but handle direct call
+            else:
                 try: await member.send(msg_content)
                 except discord.Forbidden: logger.warning(f"SVC_START: Cannot send DM to {member.name} (already active).")
             return
         
-        # Determine if this is a first-time verification or an update
         is_update_session = False
-        current_roles_text_for_llm = ""
-        current_manageable_role_ids_for_user = []
-
-        verified_role = member.guild.get_role(self.settings.VERIFIED_ROLE_ID)
         if verified_role and verified_role in member.roles:
             is_update_session = True
         
-        # Check for existing manageable skill roles even if not "verified" role (e.g. partial previous)
-        current_roles_text_for_llm, current_manageable_role_ids_for_user = self._get_member_current_manageable_roles_text(member)
-        if current_manageable_role_ids_for_user:
+        _, current_manageable_role_ids_for_user = self._get_member_current_manageable_roles_text(member)
+        if current_manageable_role_ids_for_user: # If user has any manageable skill roles
             is_update_session = True
         
         self.active_verifications[member.id] = {
             'retries_left': self.settings.VERIFICATION_RETRIES,
             'conversation_history': [], 
-            'last_proposed_classification': None, # Stores the LLMClassification
-            'is_update_session': is_update_session,
-            'initial_manageable_role_ids': current_manageable_role_ids_for_user,
-            'accumulated_unmappable_skills': []
+            'last_proposed_classification': None,
+            'is_update_session': is_update_session, # Store if this is an update
+            'initial_manageable_role_ids': current_manageable_role_ids_for_user 
         }
         user_state = self.active_verifications[member.id]
 
-        # Add 'verificationinprogress' role
         inprogress_role = member.guild.get_role(self.settings.VERIFICATION_IN_PROGRESS_ROLE_ID)
         if inprogress_role:
             try:
-                if inprogress_role not in member.roles: # Add only if not present
+                if inprogress_role not in member.roles:
                     await member.add_roles(inprogress_role, reason="Verification process started/updated")
                 logger.info(f"SVC_START: Ensured '{inprogress_role.name}' on {member.name}")
             except discord.Forbidden: logger.error(f"SVC_START: Missing permissions to add '{inprogress_role.name}' to {member.name}")
             except discord.HTTPException as e: logger.error(f"SVC_START: Failed to add '{inprogress_role.name}' to {member.name}: {e}")
         else:
-            logger.error(f"SVC_START: Role ID for 'verificationinprogress' ({self.settings.VERIFICATION_IN_PROGRESS_ROLE_ID}) not found.")
+            logger.error(f"SVC_START: Role ID 'verificationinprogress' ({self.settings.VERIFICATION_IN_PROGRESS_ROLE_ID}) not found.")
             if interaction and not interaction.response.is_done():
-                 await interaction.response.send_message("Error: System misconfiguration (inprogress role). Contact admin.", ephemeral=True)
+                 await interaction.response.send_message("Error: System misconfig (inprogress role). Contact admin.", ephemeral=True)
             self.active_verifications.pop(member.id, None)
             return
 
-        # Initial DM: Bilingual greeting, then specific prompt based on first-time or update
-        base_greeting_en = f"Hello {member.mention}! Welcome to  **{member.guild.name}**."
-        base_greeting_es = f"¡Hola {member.mention}! Bienvenido a **{member.guild.name}**."
-        
-        initial_bot_dm_content_for_history = f"{base_greeting_en}\n{base_greeting_es}\n"
-        
-        first_user_message_for_llm = "" # This will be user's actual first reply
-        
-        if is_update_session:
-            # For update sessions, the bot's first *substantial* message after user replies will be from LLM, acknowledging current roles.
-            # The very first instruction to user after bilingual greeting could be generic.
-            initial_dm_message = (
-                f"To update your roles, please tell me what you'd like to change, add, or remove regarding your skills (Programming Languages, Experience Level, OS).\n\n"
-                f"Para actualizar tus roles, por favor dime qué te gustaría cambiar, añadir o eliminar sobre tus habilidades (Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos)."
-            )
-            # The context about current roles will be prepended to the user's *first actual skill-related message* before sending to LLM.
-        else: # First-time verification
-            initial_dm_message = (
-                f"{base_greeting_en}\n"
-                f"To get started, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems).\n\n"
-                f"{base_greeting_es}\n"
-                f"Para comenzar, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos)."
-            )
+        initial_dm_message = (
+            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems).\n\n"
+            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos)."
+        )
         
         dm_channel = None
         try:
@@ -153,7 +135,6 @@ class VerificationFlowService:
             else:
                 logger.error(f"SVC_START: DM channel is None for {member.name}.")
                 await self._conclude_verification(member, success=False, reason="Failed to establish DM channel.")
-
         except discord.Forbidden:
             logger.warning(f"SVC_START: Cannot send initial DM to {member.name}. User might have DMs disabled.")
             await self._conclude_verification(member, success=False, reason="Failed to send DM (DMs possibly disabled).")
@@ -172,7 +153,7 @@ class VerificationFlowService:
         try:
             with open(self.settings.PROMPT_FILE_USER_VERIFICATION, "r", encoding="utf-8") as f:
                 verification_prompt_template = f.read().strip()
-        except Exception as e:
+        except Exception as e: # Simplified error handling
             logger.error(f"DM_HANDLER: Failed to load user verification prompt: {e}", exc_info=True)
             if dm_channel: await dm_channel.send("I'm having trouble accessing my instructions. Please contact an admin.")
             await self._conclude_verification(member, success=False, reason="System error: Missing verification prompt.")
@@ -184,7 +165,9 @@ class VerificationFlowService:
              await self._conclude_verification(member, success=False, reason="System error: Role data not ready.")
              return
 
-        is_first_user_message_in_flow = True # Flag from start_verification_process context
+        # Determine if it's the user's first actual skill-related input in this flow
+        is_first_substantive_user_reply = (len(user_state['conversation_history']) == 1 and 
+                                           user_state['conversation_history'][0]['role'] == 'assistant')
 
         while user_state.get('retries_left', 0) > 0:
             try:
@@ -199,67 +182,49 @@ class VerificationFlowService:
                 
                 if member.id not in self.active_verifications: return 
                 
-                processed_input_for_llm = user_input # Default
+                # This will be the actual content of the "user" message turn for the LLM
+                llm_turn_user_content = user_input 
                 
-                if is_first_user_message_in_flow and user_state.get('is_update_session'):
-                    # _get_member_current_manageable_roles_text returns:
-                    # "I see you currently have...: RoleA, RoleB" OR "You don't seem to have..."
-                    # We only want the role list part if roles exist.
-                    _, current_manageable_role_ids = self._get_member_current_manageable_roles_text(member)
-                    
-                    if current_manageable_role_ids:
-                        # Get names for only the current manageable roles
-                        current_role_names = [self.bot.server_roles_map.get(rid, str(rid)) # type: ignore
-                                              for rid in current_manageable_role_ids
-                                              if self.bot.server_roles_map.get(rid)] # type: ignore
-                        
-                        if current_role_names:
-                            prepended_context = f"[System Note: User is updating roles. Current roles: {', '.join(current_role_names)}. User's request follows.]\nUser: {user_input}"
-                        else: # Has 'verified' role but no specific manageable skill roles identified previously
-                            prepended_context = f"[System Note: User is updating roles (may have general 'verified' status). User's request follows.]\nUser: {user_input}"
-                    else: # No current manageable roles, treat more like a first-time despite 'is_update_session' perhaps being true due to 'verified' role.
-                        prepended_context = f"[System Note: User is initiating verification (may already be 'verified' generally). User's request follows.]\nUser: {user_input}"
-                    
-                    processed_input_for_llm = prepended_context
-                    logger.info(f"DM_HANDLER: Using context for update session for {member.name}: {processed_input_for_llm.splitlines()[0]}...") # Log only first line of context
-                is_first_user_message_in_flow = False # Only prepend context once
+                # This history is built for *this specific LLM call*
+                history_for_llm_call = list(user_state['conversation_history'])
 
-                # NEW: Prepend instruction if this is the user's final attempt this session
-                if user_state['retries_left'] == 1: # This is the last chance
-                    logger.info(f"DM_HANDLER: This is the final attempt for {member.name}. Instructing LLM.")
+                # Prepend context for update sessions on the user's first actual skill-related message for this session
+                if is_first_substantive_user_reply and user_state.get('is_update_session'):
+                    current_roles_text, _ = self._get_member_current_manageable_roles_text(member)
+                    context_note_for_llm = ""
+                    if "You don't seem to have any skill" not in current_roles_text:
+                        context_note_for_llm = f"[System Note for LLM: User is updating. {current_roles_text} Their new request follows this note in the user's actual message.]"
+                    else:
+                        context_note_for_llm = "[System Note for LLM: User is initiating/updating verification (may already be 'verified' generally). Their request follows this note in the user's actual message.]"
+                    
+                    history_for_llm_call.append({'role': 'assistant', 'content': context_note_for_llm})
+                    logger.info(f"DM_HANDLER: Added update context to history for {member.name} for this LLM call.")
+                
+                # Add instruction if this is the user's final attempt this session
+                if user_state['retries_left'] == 1: # This IS the last chance
+                    logger.info(f"DM_HANDLER: This is the final attempt for {member.name}. Instructing LLM for final response.")
                     final_attempt_instruction = (
                         "[System Instruction for LLM: This is the user's final attempt in this session. "
                         "Based on the entire conversation, make your best effort to classify their roles. "
                         "In your 'message_to_user', clearly state the roles that WILL BE ASSIGNED, "
                         "do NOT ask for further textual confirmation (like 'is this correct? say yes'), "
                         "and inform them they can use the /assign-roles command for future changes. "
-                        "You MUST set 'user_has_confirmed' to true and 'is_complete' to true in your JSON response if you propose any final set of roles, even if it's based on partial information. "
-                        "If you cannot determine any roles even on this final attempt, state that clearly in 'message_to_user' and set 'classification' to null or empty, but still set 'user_has_confirmed' and 'is_complete' to true to conclude the session.]\n"
-                        "User's actual final input is: "
+                        "You MUST set 'user_has_confirmed' to true and 'is_complete' to true in your JSON response if you propose any final set of roles, even if it's based on partial information or no specific skill roles. "
+                        "If you cannot determine any roles even on this final attempt, state that clearly in 'message_to_user', set 'classification' to null or empty, but still set 'user_has_confirmed' and 'is_complete' to true to conclude the session.]\n"
+                        "The user's actual final input (which you should respond to) follows this system instruction within their message."
                     )
-                    # Prepend this system instruction to the user's actual input for this turn
-                    processed_input_for_llm = final_attempt_instruction + user_input 
-                    # Note: if is_update_session was also true, processed_input_for_llm would be overwritten.
-                    # We need to combine these contexts if both are true for the first message of a final attempt.
-                    # Let's refine this: the final_attempt_instruction should wrap the already processed_input_for_llm
-                    if user_state.get('is_update_session') and user_state['retries_left'] == 1 and user_response_message.content.strip() == user_input : # if it's the first message AND last retry
-                         # Reconstruct processed_input_for_llm if it was an update's first message
-                         current_roles_text_for_final_update, _ = self._get_member_current_manageable_roles_text(member)
-                         user_part = (f"[System Note: User wants to update roles. {current_roles_text_for_final_update}]\n"
-                                      f"User's request: {user_input}")
-                         processed_input_for_llm = final_attempt_instruction + user_part
-                    else: # Not an update's first message, or not an update session, just prepend final attempt instruction
-                         processed_input_for_llm = final_attempt_instruction + user_input
-
-
-                # Add the (potentially modified) user input that goes to LLM to history
-                user_state['conversation_history'].append({'role': 'user', 'content': processed_input_for_llm})
+                    # Prepend this to the user's actual input for this turn
+                    llm_turn_user_content = final_attempt_instruction + "\n\nUser's final input: " + user_input
+                
+                # Add user's raw input to persistent history for the session
+                user_state['conversation_history'].append({'role': 'user', 'content': user_input})
+                is_first_substantive_user_reply = False # Processed the first substantive reply
 
                 llm_guidance: Optional[LLMVerificationResponse] = None
                 async with dm_channel.typing():
                     llm_guidance = await self.llm_client.get_verification_guidance(
-                        user_message=processed_input_for_llm, 
-                        conversation_history=user_state['conversation_history'][:-1], # History before this turn
+                        user_message=llm_turn_user_content, # This now contains user_input, possibly prefixed with final_attempt_instruction
+                        conversation_history=history_for_llm_call, # This contains prior turns + context_note_for_llm if applicable
                         categorized_server_roles=self.bot.categorized_server_roles, # type: ignore
                         available_roles_map=self.bot.server_roles_map, # type: ignore
                         verification_prompt_template=verification_prompt_template
@@ -267,45 +232,23 @@ class VerificationFlowService:
 
                 if not llm_guidance: 
                     await dm_channel.send("I'm having trouble processing your information. Could you rephrase or try again?")
-                    user_state['conversation_history'].pop() # Remove the problematic input
-                    # Do not decrement retries for an LLM processing failure to give user a fair chance
+                    # Do not remove user_input from persistent history
                     continue 
 
                 if member.id not in self.active_verifications: return 
                 user_state['conversation_history'].append({'role': 'assistant', 'content': llm_guidance['message_to_user']})
                 user_state['last_proposed_classification'] = llm_guidance.get('classification')
-                if member.id not in self.active_verifications: return 
-                user_state['conversation_history'].append({'role': 'assistant', 'content': llm_guidance['message_to_user']})
-                user_state['last_proposed_classification'] = llm_guidance.get('classification')
 
-                
+                await dm_channel.send(llm_guidance['message_to_user']) 
+
                 if llm_guidance.get('unassignable_skills'):
-                    if 'accumulated_unmappable_skills' not in user_state: # Should be initialized, but good check
-                        user_state['accumulated_unmappable_skills'] = []
-                    
-                    for skill_info in llm_guidance['unassignable_skills']: # type: ignore
-                        # Basic duplicate check (skill name and category)
-                        is_duplicate = any(
-                            s.get('skill','').lower() == skill_info.get('skill','').lower() and
-                            s.get('category','').lower() == skill_info.get('category','').lower()
-                            for s in user_state['accumulated_unmappable_skills']
-                        )
-                        if not is_duplicate and skill_info.get('skill'): # Ensure skill_info and skill name are present
-                            user_state['accumulated_unmappable_skills'].append(skill_info)
-                            logger.debug(f"DM_HANDLER: Accumulated unmappable skill for {member.name}: {skill_info}")
-                
-
-                await dm_channel.send(llm_guidance['message_to_user']) # Send LLM's response
-
-                if llm_guidance.get('unassignable_skills'): # Handle this regardless of confirmation status
-                    for skill_info in llm_guidance['unassignable_skills']: # type: ignore
+                    for skill_info in llm_guidance['unassignable_skills']: 
                         await self.notify_admin_unmappable_skill(member, skill_info)
 
-                if llm_guidance.get('user_has_confirmed') is True: # LLM signals confirmation or it's the final forced assignment
+                if llm_guidance.get('user_has_confirmed') is True: 
                     logger.info(f"DM_HANDLER: LLM signaled confirmation for {member.name}.")
                     assigned_skill_role_ids = []
-                    # Use the classification from this final guidance
-                    current_classification = llm_guidance.get('classification')
+                    current_classification = llm_guidance.get('classification') 
                     if current_classification: 
                         for cat_roles in current_classification.values(): 
                             if cat_roles and isinstance(cat_roles, list): 
@@ -316,13 +259,12 @@ class VerificationFlowService:
                     await self._conclude_verification(member, success=True, assigned_skill_roles=skill_roles_to_assign)
                     return 
                 
-                # If not confirmed by LLM yet (and not the final attempt that forces confirmation)
+                # If not confirmed by LLM (and it wasn't a final attempt where LLM *should* have confirmed)
                 user_state['retries_left'] -= 1
-                logger.info(f"DM_HANDLER: Not confirmed by {member.name} or LLM needs more info. Retries left: {user_state['retries_left']}")
-                # The loop continues if retries_left > 0.
-                # The bot's own "best effort message" is now removed, as LLM handles the final message.
-
-            # ... (exception handling: asyncio.TimeoutError, discord.Forbidden, general Exception as before) ...
+                logger.info(f"DM_HANDLER: LLM did not signal final confirmation for {member.name}. Retries left: {user_state['retries_left']}")
+                # The loop will continue if retries_left > 0.
+                # The bot's own "best effort" message logic is removed because LLM handles the final message on the last attempt.
+            
             except asyncio.TimeoutError: 
                 logger.info(f"DM_HANDLER: Verification DM timed out for {member.name}.")
                 await dm_channel.send("It looks like you've been inactive. Verification timed out. Use `/assign-roles` to restart.")
@@ -337,18 +279,18 @@ class VerificationFlowService:
                 await dm_channel.send("An unexpected error occurred. Try `/assign-roles` again or contact an admin.")
                 await self._conclude_verification(member, success=False, reason="Internal error during DM conversation.")
                 return
-
+            
             if user_state.get('retries_left', 0) <= 0: 
-                # This break will lead to the "Max retries reached (final check after loop)" block
                 logger.info(f"DM_HANDLER: Retries exhausted for {member.name} based on count. Loop will terminate.")
                 break 
         
         # This block is reached if loop exited because retries_left <= 0 
-        # AND the LLM didn't signal user_has_confirmed: true on its last attempt (e.g., it couldn't classify anything).
+        # AND the LLM didn't signal user_has_confirmed: true on its last attempt (e.g., it couldn't classify anything even then).
         if member.id in self.active_verifications: 
             logger.info(f"DM_HANDLER: Max retries reached (concluding as failure) for {member.name}.")
             # _conclude_verification will send the "Max retries reached" DM to the user.
             await self._conclude_verification(member, success=False, reason="Max retries reached after conversation attempts.")
+
 
     
 
