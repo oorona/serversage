@@ -1,8 +1,8 @@
 # File: docker-compose.yml
 services:
-  welcomeai:
+  serversage:
     build: . # Build the image from the Dockerfile in the current directory
-    container_name: welcomeai # Optional: give the container a specific name
+    container_name: serversage # Optional: give the container a specific name
     
     env_file:
       - .env # Load environment variables from the .env file in the project root

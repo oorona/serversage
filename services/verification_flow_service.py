@@ -151,7 +151,7 @@ class VerificationFlowService:
         
         verification_prompt_template = ""
         try:
-            with open(self.settings.PROMPT_FILE_USER_VERIFICATION, "r", encoding="utf-8") as f:
+            with open(self.settings.PROMPT_PATH_USER_VERIFICATION_SYSTEM_TEMPLATE, "r", encoding="utf-8") as f:
                 verification_prompt_template = f.read().strip()
         except Exception as e: # Simplified error handling
             logger.error(f"DM_HANDLER: Failed to load user verification prompt: {e}", exc_info=True)
@@ -384,7 +384,7 @@ class VerificationFlowService:
                 admin_notification_title = f"✅ New User Verified: {member.display_name}"
                 summary_prompt_template = ""
                 try:
-                    with open(self.settings.PROMPT_FILE_NEW_USER_SUMMARY, "r", encoding="utf-8") as f:
+                    with open(self.settings.PROMPT_PATH_NEW_USER_SUMMARY_SYSTEM_TEMPLATE, "r", encoding="utf-8") as f:
                         summary_prompt_template = f.read().strip()
                 except Exception as e:
                     logger.error(f"SVC_CONCLUDE: Failed to load new user summary prompt: {e}")
@@ -395,7 +395,6 @@ class VerificationFlowService:
                     # This could be enhanced if language was explicitly stored.
                     # For now, we'll just pass "English" or not pass it if prompt doesn't require it
                     # The new prompt has ${language} - how to get this reliably now?
-                    # For now, let's assume LLM uses English for summary or infers.
                     # A better way: if user_state['conversation_history'] exists, take last user message's lang.
                     # Or, if we stored detected_language_code in state earlier (even if not used for LLM replies).
                     # For now, we'll tell the summary prompt to output in English.

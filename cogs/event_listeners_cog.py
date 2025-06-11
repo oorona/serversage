@@ -132,7 +132,7 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
                 await self._save_categorized_roles_to_file()
                 return
 
-            prompt_template = await self._load_prompt(self.settings.PROMPT_FILE_ROLE_CATEGORIZATION)
+            prompt_template = await self._load_prompt(self.settings.PROMPT_PATH_ROLE_CATEGORIZATION_SYSTEM)
             if not prompt_template:
                 logger.error("Role categorization prompt is empty or failed to load. Aborting categorization.")
                 if not loaded_from_file: # If we absolutely have no data
@@ -205,7 +205,7 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
         if self.settings.WELCOME_CHANNEL_ID and self.llm_client:
             welcome_channel = member.guild.get_channel(self.settings.WELCOME_CHANNEL_ID)
             if welcome_channel and isinstance(welcome_channel, discord.TextChannel):
-                prompt_template = await self._load_prompt(self.settings.PROMPT_FILE_CHANNEL_WELCOME)
+                prompt_template = await self._load_prompt(self.settings.PROMPT_PATH_CHANNEL_WELCOME_SYSTEM_TEMPLATE)
                 if prompt_template:
                     welcome_message_content = await self.llm_client.generate_welcome_message(
                         member_name=member.display_name,

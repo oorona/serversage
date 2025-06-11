@@ -112,10 +112,8 @@ class LLMClient:
             logger.error(f"Unexpected error formatting new user summary prompt: {e}", exc_info=True)
             return "Error: Could not generate summary due to an unexpected prompt issue."
 
-        messages = [{"role": "user", "content": formatted_prompt}] # System role might be better if prompt is an instruction
-        # Or: messages = [{"role": "system", "content": formatted_prompt}]
-        # Depending on how your LLM best processes such summarization tasks.
-        # For now, using "user" role for the formatted prompt.
+        # Changed to system role for the prompt that describes the task to the LLM
+        messages = [{"role": "system", "content": formatted_prompt}] 
 
         llm_response_data = await self._make_llm_request(messages, temperature=0.6, max_tokens=300) # Adjust tokens as needed
 
@@ -145,8 +143,11 @@ class LLMClient:
     async def categorize_server_roles(self, roles_data: List[Dict[str, Any]], categorization_prompt: str) -> Dict[str, List[int]]:
         logger.info(f"Attempting to categorize {len(roles_data)} roles with LLM.")
         roles_list_str = "\n".join([f"- {role['name']} (ID: {role['id']})" for role in roles_data])
+        # The prompt itself is now the system instruction, and the roles list is appended to it.
         formatted_prompt = f"{categorization_prompt}\n\nHere is the list of roles to categorize:\n{roles_list_str}\n\nPlease return ONLY the JSON object with categories as keys and lists of role NAMES as values. Example: {{ \"Programming Language\": [\"Python Developer\", \"Java Expert\"] }}"
-        messages = [{"role": "user", "content": formatted_prompt}]
+        
+        # Changed to system role for the prompt that describes the task to the LLM
+        messages = [{"role": "system", "content": formatted_prompt}]
         llm_response_data = await self._make_llm_request(messages, temperature=0.1, max_tokens=2048, expect_json=True) 
         categorized_role_ids: Dict[str, List[int]] = {}
 

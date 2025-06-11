@@ -46,12 +46,13 @@ class Settings(BaseSettings):
     # Logging Configuration
     LOG_LEVEL: str = "INFO"
 
-    # File Paths
-    PROMPT_FILE_ROLE_CATEGORIZATION: str = "prompts/role_categorization_prompt.txt"
-    PROMPT_FILE_USER_VERIFICATION: str = "prompts/user_verification_prompt.txt"
-    PROMPT_FILE_CHANNEL_WELCOME: str = "prompts/channel_welcome_prompt.txt"
+    # File Paths (Updated to new structure)
+    PROMPT_PATH_ROLE_CATEGORIZATION_SYSTEM: str = "prompts/role_categorization/system.txt"
+    PROMPT_PATH_USER_VERIFICATION_SYSTEM_TEMPLATE: str = "prompts/user_verification/system_template.txt"
+    PROMPT_PATH_CHANNEL_WELCOME_SYSTEM_TEMPLATE: str = "prompts/welcome_message/system_template.txt"
+    PROMPT_PATH_NEW_USER_SUMMARY_SYSTEM_TEMPLATE: str = "prompts/new_user_summary/system_template.txt"
     CATEGORIZED_ROLES_FILE: str = "data/categorized_roles.json"
-    PROMPT_FILE_NEW_USER_SUMMARY: str = "prompts/new_user_summary_prompt.txt"
+    
 
     # This will hold the parsed list of admin role IDs
     PARSED_ADMIN_ROLE_IDS: List[int] = []
