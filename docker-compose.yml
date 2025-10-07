@@ -6,6 +6,11 @@ services:
     
     env_file:
       - .env # Load environment variables from the .env file in the project root
+
+    environment:
+      # Point to the location of the secrets inside the container
+      - DISCORD_BOT_TOKEN_FILE=/run/secrets/discord_bot_token
+      - LLM_API_TOKEN_FILE=/run/secrets/llm_api_token
       
     volumes:
       # Mount the local ./data directory to /app/data in the container
@@ -15,26 +20,25 @@ services:
       # Mount the local ./logs directory to /app/logs in the container
       # This persists log files outside the container if file logging is enabled.
       - ./logs:/app/logs
-      
+     # Mount the prompts directory to allow for live editing without rebuilding
+      - ./prompts:/app/prompts
+        
     restart: unless-stopped # Restart policy: restarts unless explicitly stopped or on error
-    # Other restart policies: "no", "on-failure", "always"
+    
+    secrets:
+      - discord_bot_token
+      - llm_api_token
 
-    # Optional: Add healthcheck if your bot has a way to report health
-    # healthcheck:
-    #   test: ["CMD", "your_healthcheck_command_or_script"] # e.g., a simple ping or custom script
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
     networks:
-      - llmnet
+      - intranet
 
-    # Optional: Logging driver configuration for Docker itself
-    # logging:
-    #   driver: "json-file"
-    #   options:
-    #     max-size: "10m" # Max size of log files before rotation
-    #     max-file: "3"   # Number of log files to keep
-
-networks: # Optional: define a default network if you plan to link other services
-  llmnet:
+networks: 
+  intranet:
     external: true
+
+# Define the secrets to be used by services
+secrets:
+  discord_bot_token:
+    file: ./secrets/discord_token.txt # Path to your discord token secret on the host
+  llm_api_token:
+    file: ./secrets/llm_api_token.txt # Path to your llm api token secret on the host

@@ -34,6 +34,31 @@ This Discord bot is designed to automate the user verification process within a 
     * Any roles that will act as admin roles for the bot.
     * (Skill, Experience, OS roles can be pre-created; the bot will categorize them. If they don't exist, the bot can notify admins when users mention them.)
 
+##  Permissions and Intents
+
+For the bot to work correctly, you must configure its permissions and intents.
+
+### **Privileged Gateway Intents**
+
+These must be enabled in your **Discord Developer Portal** (under your Application > Bot > Privileged Gateway Intents).
+
+* **Server Members Intent:** **(Required)** Allows the bot to see new members joining, access the server's member list for batch commands, and reliably retrieve member information.
+* **Message Content Intent:** **(Required)** Allows the bot to read the content of messages, which is essential for the verification process in DMs.
+
+### **Bot Permissions**
+
+These permissions are granted when you invite the bot to your server. Generate an invite link using the "OAuth2 URL Generator" in the Developer Portal with the `bot` and `applications.commands` scopes selected.
+
+* **Manage Roles:** **(Required)** To assign/remove `verified`, `unverified`, and skill roles.
+* **Send Messages:** To send DMs and messages to welcome/notification channels.
+* **View Channels:** To see the channels it needs to post messages in.
+* **Use Application Commands:** For users to be able to use slash commands.
+* **Read Message History:** To maintain context in DM conversations.
+* **Embed Links:** (Recommended) To properly format URLs in messages.
+
+***Note:*** *Ensure the bot's role is higher in the server's role hierarchy than the roles it needs to manage.*
+[url](https://discord.com/oauth2/authorize?client_id=1377667083986403428&permissions=2416004096&integration_type=0&scope=bot)
+
 ## 🚀 Setup Instructions
 
 1.  **Clone the Repository:**

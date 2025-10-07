@@ -2,19 +2,14 @@
 
 import discord
 from discord.ext import commands
-from discord import app_commands # Required for slash commands
+from discord import app_commands
 import logging
-import asyncio # For potential delays in batch processing
-
-# Assuming VerificationFlowService is correctly imported or available on bot instance
-# from ..services.verification_flow_service import VerificationFlowService 
-# from ..config import Settings # For type hinting if needed
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 async def check_admin_roles(interaction: discord.Interaction) -> bool:
     """Checks if the user invoking the command has one of the configured admin roles."""
-    # Access settings through the bot instance, which should be available in interaction.client
     bot_instance = interaction.client
     if not hasattr(bot_instance, 'settings') or not hasattr(bot_instance.settings, 'PARSED_ADMIN_ROLE_IDS'):
         logger.error("Admin role settings not found on bot instance. Denying admin command access.")
@@ -23,9 +18,9 @@ async def check_admin_roles(interaction: discord.Interaction) -> bool:
     admin_role_ids = bot_instance.settings.PARSED_ADMIN_ROLE_IDS
     if not admin_role_ids:
         logger.warning(f"No admin roles configured. Denying access for {interaction.user.name} to an admin command.")
-        return False # No admin roles configured, so no one is an admin for the bot
+        return False
 
-    user_role_ids = {role.id for role in interaction.user.roles} # type: ignore
+    user_role_ids = {role.id for role in interaction.user.roles}
     
     is_admin = any(admin_id in user_role_ids for admin_id in admin_role_ids)
     if not is_admin:
@@ -35,15 +30,13 @@ async def check_admin_roles(interaction: discord.Interaction) -> bool:
 class AdminCommandsCog(commands.Cog, name="AdminCommands"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.settings = bot.settings # type: ignore # settings is attached in main.py
-        self.llm_client = bot.llm_client # type: ignore
-        self.verification_service = bot.verification_service # type: ignore
+        self.settings = bot.settings
+        self.llm_client = bot.llm_client
+        self.verification_service = bot.verification_service
 
-    # Define the admin command group
     admin_group = app_commands.Group(
         name="admin", 
         description="Administrative commands for the verification bot."
-        # default_permissions can be set here if needed, or rely on checks
     )
 
     @admin_group.command(name="verify-user", description="Manually starts the verification process for a specific member.")
@@ -52,20 +45,25 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
     async def verify_user(self, interaction: discord.Interaction, member: discord.Member):
         logger.info(f"Admin command '/admin verify-user' used by {interaction.user.name} for {member.name}")
         
+        # --- MODIFICATION START ---
+        # Acknowledge the interaction immediately
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        # --- MODIFICATION END ---
+        
         if member.bot:
-            await interaction.response.send_message(f"{member.mention} is a bot and cannot be verified.", ephemeral=True)
+            # Use followup
+            await interaction.followup.send(f"{member.mention} is a bot and cannot be verified.", ephemeral=True)
             return
 
         if self.verification_service:
-            # The service's start_verification_process now handles ephemeral responses if interaction is passed
+            # The service will now use followup messages.
             await self.verification_service.start_verification_process(member, interaction)
-            # No need for followup here if start_verification_process sends the initial response.
-            # If it doesn't, then:
-            # await interaction.response.send_message(f"Attempting to start verification for {member.mention}. They will receive a DM.", ephemeral=True)
         else:
             logger.error("Verification service not available for '/admin verify-user'.")
-            await interaction.response.send_message("Error: Verification service is not available. Please contact bot support.", ephemeral=True)
+            # Use followup
+            await interaction.followup.send("Error: Verification service is not available. Please contact bot support.", ephemeral=True)
 
+    # ... (rest of the file remains the same) ...
     @admin_group.command(name="initiate-verification-batch", description="Initiates DM verification for a batch of unverified users.")
     @app_commands.check(check_admin_roles)
     @app_commands.describe(count="The maximum number of users to include in this batch (e.g., 10).")
@@ -98,15 +96,12 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             
             member_role_ids = {role.id for role in member.roles}
             
-            # Candidate if: has unverified_role AND does NOT have verified_role AND does NOT have inprogress_role
-            # Or, if they simply don't have verified or inprogress, and might not even have unverified yet (e.g. very new setup)
-            # For batch, let's primarily target those marked as 'unverified'.
             if unverified_role_id in member_role_ids and \
                verified_role_id not in member_role_ids and \
                inprogress_role_id not in member_role_ids:
                 candidates.append(member)
             
-            if len(candidates) >= count * 2: # Fetch a bit more to account for potential DM failures later if needed
+            if len(candidates) >= count * 2:
                 break
         
         if not candidates:
@@ -121,18 +116,13 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
 
         for member_to_verify in actual_batch:
             try:
-                # We don't pass the interaction here as it's already responded to.
-                # The start_verification_process will just send DMs.
                 await self.verification_service.start_verification_process(member_to_verify)
                 processed_count += 1
-                # Optional: add a small delay to avoid hitting DM rate limits too quickly
-                await asyncio.sleep(1) # 1-second delay between DMs
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Error starting verification for {member_to_verify.name} in batch: {e}", exc_info=True)
                 error_count += 1
         
-        # Send a final summary (optional, could be too noisy for large batches)
-        # For now, the initial followup is the main feedback.
         logger.info(f"Batch verification complete. Attempted: {len(actual_batch)}. Successful starts: {processed_count}. Errors: {error_count}.")
 
 
@@ -168,12 +158,10 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             
             is_verified = verified_role_id in member_role_ids
             is_in_progress = inprogress_role_id in member_role_ids
-            is_unverified = unverified_role_id in member_role_ids # For checking if unverified needs to be ADDED
+            is_unverified = unverified_role_id in member_role_ids
 
-            # Target 1: Users stuck in "in progress" (and not also verified)
             if is_in_progress and not is_verified:
                 users_to_reset_roles.append(member)
-            # Target 2: Users with no verification status at all (not verified, not unverified, not in_progress)
             elif not is_verified and not is_unverified and not is_in_progress:
                  users_to_reset_roles.append(member)
 
@@ -187,9 +175,9 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             
             try:
                 if roles_to_remove:
-                    await member_to_reset.remove_roles(*roles_to_remove, reason="Admin reset stale verification") # type: ignore
-                if roles_to_add and not (unverified_role in member_to_reset.roles): # Add unverified only if not already present
-                    await member_to_reset.add_roles(*roles_to_add, reason="Admin reset stale verification / Initial assignment") # type: ignore
+                    await member_to_reset.remove_roles(*roles_to_remove, reason="Admin reset stale verification")
+                if roles_to_add and not (unverified_role in member_to_reset.roles):
+                    await member_to_reset.add_roles(*roles_to_add, reason="Admin reset stale verification / Initial assignment")
                 reset_count += 1
                 logger.info(f"Reset user {member_to_reset.name} to unverified. Removed: {[r.name for r in roles_to_remove if r]}. Added: {[r.name for r in roles_to_add if r]}.")
             except discord.Forbidden:
@@ -212,7 +200,7 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
             await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
             return
 
-        event_cog = self.bot.get_cog("EventListeners") # type: ignore # Bot should have this cog
+        event_cog = self.bot.get_cog("EventListeners")
         if event_cog and hasattr(event_cog, 'perform_role_categorization'):
             try:
                 await event_cog.perform_role_categorization(interaction.guild, force_rebuild=True)
@@ -226,8 +214,4 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
 
 
 async def setup(bot: commands.Bot):
-    # Check if AdminCommandsCog is already added, to prevent issues on reload
-    # if bot.get_cog("AdminCommands") is None:
     await bot.add_cog(AdminCommandsCog(bot))
-    # else:
-    #     logger.info("AdminCommandsCog already loaded.")

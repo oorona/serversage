@@ -11,7 +11,7 @@ import re
 logger = logging.getLogger(__name__)
 
 # TypedDict definitions for structured LLM responses
-class LLMClassification(TypedDict, total=False): # total=False means keys are optional
+class LLMClassification(TypedDict, total=False):
     Programming_Language: List[int] 
     Experience_Level: List[int]
     Operating_System: List[int]
@@ -20,7 +20,7 @@ class LLMVerificationResponse(TypedDict):
     classification: Optional[LLMClassification]
     message_to_user: str
     is_complete: bool
-    user_has_confirmed: Optional[bool]  # <<< ADD OR ENSURE THIS LINE IS PRESENT
+    user_has_confirmed: Optional[bool]
     unassignable_skills: Optional[List[Dict[str, str]]]
 
 
@@ -44,15 +44,19 @@ class LLMClient:
         if self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
 
+        final_temperature = temperature
+        if "gpt-5" in self.model_name.lower():
+            logger.debug(f"Model '{self.model_name}' is a gpt-5 variant. Forcing temperature to 1.0 as required.")
+            final_temperature = 1.0
+
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": final_temperature,
             "max_tokens": max_tokens,
         }
 
         if expect_json:
-             # payload["format"] = "json" # Uncomment if your backend supports this (e.g. Ollama)
              logger.info("Attempting to request JSON formatted response from LLM (if backend supports 'format: json').")
 
         request_url = self.api_url 
@@ -93,13 +97,12 @@ class LLMClient:
                                         conversation_history_text: str, 
                                         assigned_roles_names_str: str, 
                                         summary_prompt_template: str,
-                                        conversation_language: str = "English" # Default to English if not specified
+                                        conversation_language: str = "English"
                                        ) -> Optional[str]:
         logger.info(f"Generating new user summary. Conversation language: {conversation_language}")
         
         try:
             template = Template(summary_prompt_template)
-            # Ensure placeholders match exactly what's in the prompt file
             formatted_prompt = template.substitute(
                 language=conversation_language, 
                 conversation_history=conversation_history_text,
@@ -112,10 +115,9 @@ class LLMClient:
             logger.error(f"Unexpected error formatting new user summary prompt: {e}", exc_info=True)
             return "Error: Could not generate summary due to an unexpected prompt issue."
 
-        # Changed to system role for the prompt that describes the task to the LLM
         messages = [{"role": "system", "content": formatted_prompt}] 
 
-        llm_response_data = await self._make_llm_request(messages, temperature=0.6, max_tokens=300) # Adjust tokens as needed
+        llm_response_data = await self._make_llm_request(messages, temperature=0.6, max_tokens=300)
 
         if llm_response_data:
             response_content_str: Optional[str] = None
@@ -143,10 +145,8 @@ class LLMClient:
     async def categorize_server_roles(self, roles_data: List[Dict[str, Any]], categorization_prompt: str) -> Dict[str, List[int]]:
         logger.info(f"Attempting to categorize {len(roles_data)} roles with LLM.")
         roles_list_str = "\n".join([f"- {role['name']} (ID: {role['id']})" for role in roles_data])
-        # The prompt itself is now the system instruction, and the roles list is appended to it.
         formatted_prompt = f"{categorization_prompt}\n\nHere is the list of roles to categorize:\n{roles_list_str}\n\nPlease return ONLY the JSON object with categories as keys and lists of role NAMES as values. Example: {{ \"Programming Language\": [\"Python Developer\", \"Java Expert\"] }}"
         
-        # Changed to system role for the prompt that describes the task to the LLM
         messages = [{"role": "system", "content": formatted_prompt}]
         llm_response_data = await self._make_llm_request(messages, temperature=0.1, max_tokens=2048, expect_json=True) 
         categorized_role_ids: Dict[str, List[int]] = {}
@@ -199,7 +199,7 @@ class LLMClient:
                                         categorized_server_roles: Dict[str, List[int]], 
                                         available_roles_map: Dict[int, str], 
                                         verification_prompt_template: str,
-                                        max_retries: int = 2, # Number of retries after initial attempt
+                                        max_retries: int = 2,
                                         retry_delay_seconds: int = 2
                                        ) -> Optional[LLMVerificationResponse]:
         logger.info(f"Getting verification guidance from LLM for user message: '{user_message}'")
@@ -218,27 +218,45 @@ class LLMClient:
             system_prompt_content = template.substitute(
                 available_roles_text_list=available_roles_text_list
             )
-        except KeyError as e: # Should not happen if prompt is correct
+        except KeyError as e:
             logger.error(f"KeyError during string.Template substitution! Missing key: {e.args[0]}", exc_info=True)
-            # ... (return fallback response as before, ensure user_has_confirmed is present) ...
             return {"classification": None, "message_to_user": "Prompt error.", "is_complete": False, "user_has_confirmed": False, "unassignable_skills": None}
         except ValueError as e: 
             logger.error(f"ValueError during string.Template substitution (bad template syntax): {e}", exc_info=True)
-            # ... (return fallback response as before, ensure user_has_confirmed is present) ...
             return {"classification": None, "message_to_user": "Prompt syntax error.", "is_complete": False, "user_has_confirmed": False, "unassignable_skills": None}
 
         messages = [{"role": "system", "content": system_prompt_content}]
         messages.extend(conversation_history) 
         messages.append({"role": "user", "content": user_message}) 
 
-        for attempt in range(max_retries + 1): # Initial attempt + max_retries
+        # --- MODIFICATION START: IMPLEMENT 3-STEP RETRY LOGIC ---
+        last_llm_response_content = "" # Store the raw content of the last failed response
+
+        for attempt in range(max_retries + 1):
             logger.info(f"LLM guidance attempt {attempt + 1}/{max_retries + 1}")
+
+            # On retries, add a corrective prompt to the message history for this attempt
+            if attempt == 1: # First failure, begin self-correction
+                logger.warning("LLM response was not valid JSON. Attempting self-correction prompt.")
+                correction_prompt = {
+                    "role": "assistant",
+                    "content": f"SYSTEM: Your previous response was not valid JSON. The raw response was: ```{last_llm_response_content}```. Please re-format the entire response as a single, valid JSON object with no extra text or markdown."
+                }
+                messages.append(correction_prompt)
+            elif attempt == 2: # Second failure, switch to strict mode
+                logger.error("LLM self-correction failed. Switching to strict mode prompt.")
+                strict_prompt = {
+                    "role": "assistant",
+                    "content": "SYSTEM: Your previous response was still not valid JSON. Output ONLY a minified JSON object with the required keys. Do not add explanations, do not use markdown, do not include any text before or after the braces."
+                }
+                messages.append(strict_prompt)
+
+
             llm_response_data = await self._make_llm_request(messages, temperature=0.3, max_tokens=1024, expect_json=True)
             
             if llm_response_data:
                 response_content_str: Optional[str] = None
                 try:
-                    # Extract actual content string from LLM response
                     if "message" in llm_response_data and isinstance(llm_response_data["message"], dict) and "content" in llm_response_data["message"]:
                         response_content_str = llm_response_data["message"]["content"]
                     elif "choices" in llm_response_data and isinstance(llm_response_data.get("choices"), list) and \
@@ -249,10 +267,9 @@ class LLMClient:
                         response_content_str = llm_response_data["choices"][0]["message"]["content"]
                     else:
                         logger.error(f"Attempt {attempt + 1}: Unexpected LLM response structure: {llm_response_data}")
-                        # This structure error might be persistent, so retrying might not help unless LLM is flaky.
-                        # For now, we'll let it fall through and potentially retry if response_content_str is None.
 
                     if response_content_str is not None and isinstance(response_content_str, str):
+                        last_llm_response_content = response_content_str # Store for potential correction
                         json_str = None
                         match = re.search(r"```json\s*(\{.*?\})\s*```", response_content_str, re.DOTALL | re.IGNORECASE)
                         if match:
@@ -265,13 +282,12 @@ class LLMClient:
                         
                         if json_str:
                             cleaned_json_str = json_str.strip()
-                            cleaned_json_str = re.sub(r",\s*([\}\]])", r"\1", cleaned_json_str) # Attempt to fix trailing commas
+                            cleaned_json_str = re.sub(r",\s*([\}\]])", r"\1", cleaned_json_str)
                             logger.debug(f"Attempt {attempt + 1}: Attempting to parse JSON: '{cleaned_json_str}'")
                             parsed_response = json.loads(cleaned_json_str)
                             
                             if all(key in parsed_response for key in ["message_to_user", "is_complete"]) and \
-                               isinstance(parsed_response.get("user_has_confirmed"), bool): # Also check type of user_has_confirmed
-                                # ... (classification parsing logic as before) ...
+                               isinstance(parsed_response.get("user_has_confirmed"), bool):
                                 if "classification" in parsed_response and parsed_response["classification"] is not None:
                                     if not isinstance(parsed_response["classification"], dict):
                                         logger.error(f"Attempt {attempt + 1}: LLM 'classification' field is not a dictionary.")
@@ -289,33 +305,28 @@ class LLMClient:
                                                 logger.error(f"Attempt {attempt + 1}: LLM 'classification' for {category_key} is not a list.")
                                                 parsed_response["classification"][category_key] = []
                                 logger.info(f"Attempt {attempt + 1}: Successfully parsed verification guidance from LLM.")
-                                return parsed_response # SUCCESS, exit retry loop
+                                return parsed_response # SUCCESS
                             else:
                                 logger.error(f"Attempt {attempt + 1}: LLM JSON response missing required keys or 'user_has_confirmed' not bool. Parsed: {parsed_response}")
-                                # This is a validation failure, treat as a parsing error for retry purposes
                                 raise json.JSONDecodeError("Missing required keys in parsed JSON", cleaned_json_str, 0) 
-                        else: # json_str is None (could not extract from response_content_str)
+                        else:
                              logger.error(f"Attempt {attempt + 1}: Could not find any JSON object in LLM response: '{response_content_str}'")
-                             # Treat as an error to allow retry
                     else: 
                         logger.error(f"Attempt {attempt + 1}: LLM response content was None or not a string. Full LLM data: {llm_response_data}")
-                        # Treat as an error to allow retry
 
-                except json.JSONDecodeError as e: # Catch JSON parsing errors specifically
-                    logger.error(f"Attempt {attempt + 1}: Failed to parse JSON: {e}. Content: '{cleaned_json_str if 'cleaned_json_str' in locals() and cleaned_json_str else (json_str if 'json_str' in locals() and json_str else response_content_str)}'")
-                    # Fall through to retry logic
-                except Exception as e: # Catch any other unexpected errors during parsing/validation
+                except json.JSONDecodeError as e:
+                    logger.error(f"Attempt {attempt + 1}: Failed to parse JSON: {e}. Content: '{last_llm_response_content}'")
+                except Exception as e:
                     logger.error(f"Attempt {attempt + 1}: Error processing LLM response: {e}", exc_info=True)
-                    # Fall through to retry logic
             
-            # If we are here, it means llm_response_data was None, or content extraction failed, or JSON parsing/validation failed.
             if attempt < max_retries:
                 logger.info(f"Retrying LLM call in {retry_delay_seconds} seconds...")
                 await asyncio.sleep(retry_delay_seconds)
             else:
                 logger.error(f"All {max_retries + 1} attempts to get valid LLM guidance failed.")
         
-        # Fallback if all retries fail
+        # --- MODIFICATION END ---
+
         logger.warning("Using fallback response for verification guidance after all retries.")
         fallback_response_defined: LLMVerificationResponse = {
             "classification": None,
@@ -326,46 +337,36 @@ class LLMClient:
         }
         return fallback_response_defined
 
-    # Ensure this method is part of the LLMClient class
-
     async def generate_welcome_message(self, member_name: str, server_name: str, member_id: int, welcome_prompt_template_str: str) -> str:
         logger.info(f"Generating welcome message for '{member_name}' in server '{server_name}'")
         
         system_message_content: Optional[str] = None
         try:
-            # Using .format() here is fine for simple substitutions like server_name
             system_message_content = welcome_prompt_template_str.format(server_name=server_name, member_name=member_name, member_id=member_id)
         except KeyError as e:
             logger.error(f"Placeholder {e} missing in welcome_prompt_template (expected {{server_name}}). Using generic system prompt.")
-            # Fallback system prompt if template is misconfigured or key is missing
             system_message_content = (
                 "You are a friendly AI assistant. Generate a short, enthusiastic welcome message for a new Discord user. "
                 "Acknowledge them by name and mention they might get a DM for role assignment."
             )
         except Exception as e:
             logger.error(f"Error formatting system prompt for welcome message: {e}", exc_info=True)
-            system_message_content = "You are a friendly AI assistant. Generate a welcome message." # Basic fallback
+            system_message_content = "You are a friendly AI assistant. Generate a welcome message."
 
-        # 2. Prepare the user message with the specific trigger and dynamic info
         user_message_content = f"A new user named '{member_name}' has just joined the server. Please generate their welcome message."
 
-        # 3. Construct the messages list
         messages = [
             {"role": "system", "content": system_message_content},
             {"role": "user", "content": user_message_content}
         ]
         
-        # 4. Call the LLM
-        # Temperature might be slightly higher for a more creative/friendly welcome message
-        llm_response_data = await self._make_llm_request(messages, temperature=0.7, max_tokens=150) # Adjusted max_tokens for a short welcome
+        llm_response_data = await self._make_llm_request(messages, temperature=0.7, max_tokens=150)
         
-        # 5. Define a sensible fallback message
         fallback_text = f"Welcome to {server_name}, {member_name}! We're excited to have you here. You might receive a DM shortly to help assign some initial roles."
 
         if llm_response_data:
             response_content_str: Optional[str] = None
             try:
-                # Try to extract content based on common LLM response structures
                 if "message" in llm_response_data and \
                    isinstance(llm_response_data["message"], dict) and \
                    "content" in llm_response_data["message"]:
@@ -382,8 +383,6 @@ class LLMClient:
                     logger.error(f"Unexpected LLM response structure for welcome message: {llm_response_data}")
 
                 if response_content_str is not None and isinstance(response_content_str, str):
-                    # LLMs might sometimes still include the user's name or other parts of the prompt
-                    # if not explicitly told to only return the message. We'll assume it's good for now.
                     return response_content_str.strip()
                 else:
                     logger.warning(f"LLM response content for welcome message was None or not a string. Data: {llm_response_data}")
