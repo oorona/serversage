@@ -1,0 +1,45 @@
+{
+  "name": "categorize_server_roles",
+  "description": "Categorizes a list of Discord server roles into predefined categories.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "Programming_Language": {
+        "type": "array",
+        "description": "A list of role names that are programming languages.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Experience_Level": {
+        "type": "array",
+        "description": "A list of role names that represent an experience level.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Operating_System": {
+        "type": "array",
+        "description": "A list of role names that are operating systems.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Tool": {
+        "type": "array",
+        "description": "A list of role names that are tools.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Framework": {
+        "type": "array",
+        "description": "A list of role names that are frameworks.",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": ["Programming_Language", "Experience_Level", "Operating_System", "Tool", "Framework"]
+  }
+}

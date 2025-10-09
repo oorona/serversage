@@ -4,7 +4,6 @@ import asyncio
 import discord
 from discord.ext import commands
 import logging
-import httpx # Added for httpx.AsyncClient
 
 # Load settings first to ensure they are available globally if needed
 # and to catch configuration errors early.
@@ -22,8 +21,6 @@ except ImportError:
 
 from utils.logging_setup import setup_logging
 from bot import VerificationBot # Import the bot class from bot.py
-from llm_integration.llm_client import LLMClient # Import LLMClient
-from services.verification_flow_service import VerificationFlowService # Import VerificationFlowService
 
 
 # Setup logging using the level from settings, enabling file logging
@@ -40,44 +37,21 @@ intents.message_content = True
 
 
 async def main():
-    # The VerificationBot instance will load settings from the imported 'settings' object
+    """
+    Initializes and runs the bot.
+    The VerificationBot class now handles its own internal setup of services
+    like the LLMClient and VerificationFlowService via its setup_hook.
+    """
     bot_instance = VerificationBot(
         command_prefix=commands.when_mentioned_or("!verify "), # Fallback, primarily slash commands
         intents=intents,
         help_command=None # Disable default help command
     )
 
-    # Setup HTTPX AsyncClient for LLMClient
-    http_session = httpx.AsyncClient(timeout=30.0)
-
-    llm_client = LLMClient(
-        api_url=str(settings.LLM_API_URL), # Pydantic HttpUrl to string
-        api_token=settings.LLM_API_TOKEN,
-        model_name=settings.LLM_MODEL_NAME,
-        http_session=http_session
-    )
-
-    # Initialize VerificationFlowService
-    verification_service = VerificationFlowService(
-        bot=bot_instance, # Pass the bot instance
-        llm_client=llm_client,
-        settings=settings
-    )
-
-    # Attach services and settings to the bot instance
-    bot_instance.verification_service = verification_service
-    bot_instance.llm_client = llm_client
-    bot_instance.settings = settings
-
-    # Load cogs
-    logger.info("Loading cogs...")
-    try:
-        await bot_instance.load_extension("cogs.admin_commands_cog")
-        await bot_instance.load_extension("cogs.user_commands_cog")
-        await bot_instance.load_extension("cogs.event_listeners_cog")
-        logger.info("All cogs loaded successfully.")
-    except Exception as e:
-        logger.exception(f"Failed to load cogs: {e}")
+    # NOTE: The initialization of httpx, LLMClient, VerificationFlowService,
+    # and the loading of cogs have been moved into the bot.py's `setup_hook`.
+    # This is the correct place for this logic and resolves the TypeError you saw.
+    # The bot now sets itself up internally when it starts.
 
     # Run the bot
     logger.info("Starting bot...")
@@ -89,10 +63,8 @@ async def main():
         logger.critical(f"HTTP error during bot startup: {e}")
     except Exception as e:
         logger.critical(f"An unexpected error occurred during bot startup: {e}", exc_info=True)
-    finally:
-        logger.info("Bot is shutting down. Closing HTTP session.")
-        await http_session.aclose() # Ensure HTTPX session is closed gracefully
-
+    # The bot's own close() method will handle cleanup of resources like the HTTP session,
+    # so the `finally` block that was here is no longer needed.
 
 if __name__ == "__main__":
     if not settings.DISCORD_BOT_TOKEN:

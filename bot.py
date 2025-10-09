@@ -5,6 +5,7 @@ from discord.ext import commands
 import logging
 import os
 import httpx # For the shared HTTP session
+from typing import Optional, List, Dict
 
 # Assuming settings will be imported from config and passed or accessed globally
 from config import settings
@@ -44,7 +45,9 @@ class VerificationBot(commands.Bot):
             api_url=str(self.settings.LLM_API_URL),
             api_token=self.settings.LLM_API_TOKEN,
             model_name=self.settings.LLM_MODEL_NAME,
-            http_session=self.http_session # Pass the created session
+            http_session=self.http_session, # Pass the created session
+            user_verification_schema_path=self.settings.USER_VERIFICATION_SCHEMA_PATH,
+            role_categorization_schema_path=self.settings.ROLE_CATEGORIZATION_SCHEMA_PATH
         )
         logger.info("LLMClient initialized.")
 

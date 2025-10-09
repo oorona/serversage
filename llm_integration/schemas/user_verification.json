@@ -1,0 +1,82 @@
+{
+  "name": "propose_user_roles",
+  "description": "Propose a set of roles for a user based on the conversation, and generate a message to the user.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "classification": {
+        "type": "object",
+        "description": "The new, complete set of target roles for the user, categorized by role type.",
+        "properties": {
+          "Programming_Language": {
+            "type": "array",
+            "description": "A list of role IDs for programming languages.",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "Experience_Level": {
+            "type": "array",
+            "description": "A list of role IDs for experience levels.",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "Operating_System": {
+            "type": "array",
+            "description": "A list of role IDs for operating systems.",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "Tool": {
+            "type": "array",
+            "description": "A list of role IDs for tools.",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "Framework": {
+            "type": "array",
+            "description": "A list of role IDs for frameworks.",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": ["Programming_Language", "Experience_Level", "Operating_System", "Tool", "Framework"]
+      },
+      "message_to_user": {
+        "type": "string",
+        "description": "A conversational message to the user, in their language."
+      },
+      "is_complete": {
+        "type": "boolean",
+        "description": "True if you are making a proposal or it's the final attempt."
+      },
+      "user_has_confirmed": {
+        "type": "boolean",
+        "description": "True ONLY if the user's message is a clear confirmation (like 'yes' or 'correct') OR if it is a final attempt where you are assigning roles."
+      },
+      "unassignable_skills": {
+        "type": "array",
+        "description": "A list of skills mentioned by the user for which no role exists.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "description": "The category of the unassignable skill."
+            },
+            "skill": {
+              "type": "string",
+              "description": "The name of the unassignable skill."
+            }
+          },
+          "required": ["category", "skill"]
+        }
+      }
+    },
+    "required": ["classification", "message_to_user", "is_complete", "user_has_confirmed", "unassignable_skills"]
+  }
+}

@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     PROMPT_PATH_CHANNEL_WELCOME_SYSTEM_TEMPLATE: str = "prompts/welcome_message/system_template.txt"
     PROMPT_PATH_NEW_USER_SUMMARY_SYSTEM_TEMPLATE: str = "prompts/new_user_summary/system_template.txt"
     CATEGORIZED_ROLES_FILE: str = "data/categorized_roles.json"
+    USER_VERIFICATION_SCHEMA_PATH: str = "llm_integration/schemas/user_verification.json"
+    ROLE_CATEGORIZATION_SCHEMA_PATH: str = "llm_integration/schemas/role_categorization.json"
 
     PARSED_ADMIN_ROLE_IDS: List[int] = []
 

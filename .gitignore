@@ -94,3 +94,4 @@ celerybeat-schedule
 *~
 
 .git
+.github
