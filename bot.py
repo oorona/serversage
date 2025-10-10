@@ -35,7 +35,8 @@ class VerificationBot(commands.Bot):
         logger.info("Running setup_hook...")
 
         # Initialize HTTP client for LLM interactions
-        self.http_session = httpx.AsyncClient(timeout=30.0) # Adjust timeout as needed
+        timeout_seconds = getattr(self.settings, 'LLM_HTTP_TIMEOUT_SECONDS', 30)
+        self.http_session = httpx.AsyncClient(timeout=timeout_seconds)
         logger.info("HTTP session initialized.")
 
         # Initialize services and attach them to the bot
@@ -47,18 +48,19 @@ class VerificationBot(commands.Bot):
             model_name=self.settings.LLM_MODEL_NAME,
             http_session=self.http_session, # Pass the created session
             user_verification_schema_path=self.settings.USER_VERIFICATION_SCHEMA_PATH,
-            role_categorization_schema_path=self.settings.ROLE_CATEGORIZATION_SCHEMA_PATH
+            role_categorization_schema_path=self.settings.ROLE_CATEGORIZATION_SCHEMA_PATH,
+            request_timeout_seconds=getattr(self.settings, 'LLM_HTTP_TIMEOUT_SECONDS', None)
         )
         logger.info("LLMClient initialized.")
 
         from services.verification_flow_service import VerificationFlowService # Moved import here
         self.verification_service = VerificationFlowService(
-            bot=self, 
-            llm_client=self.llm_client, 
+            bot=self,
+            llm_client=self.llm_client,
             settings=self.settings
         )
         logger.info("VerificationFlowService initialized.")
-        
+
         # Load cogs
         cog_dir = "cogs"
         logger.info(f"Attempting to load extensions from ./{cog_dir}")

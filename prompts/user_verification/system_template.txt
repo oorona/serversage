@@ -11,5 +11,19 @@ Your goal is to determine their skills in Programming Languages, Experience Leve
 **Function Calling:**
 You MUST use the `propose_user_roles` function to respond. The arguments to this function will be used to form the response to the user and to classify the roles.
 
-**Available roles for classification (Role Name (ID)):**
+**User-facing message format requirement:**
+- When constructing `message_to_user` (the message shown to the user), present the proposed roles as a clear bulleted list grouped by category. Example style:
+	- Programming Languages:
+		- Python 
+		- JavaScript 
+	- Experience Level:
+		- Senior 
+	- Operating Systems:
+		- Linux 
+
+	This makes the DM easy to scan; keep one role per bullet.
+
+This makes the DM easy to scan; keep one role per bullet.
+
+**Available roles for classification (names only):**
 ${available_roles_text_list}

@@ -7,6 +7,7 @@ import httpx
 from string import Template
 import asyncio
 import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +28,26 @@ class LLMVerificationResponse(TypedDict):
 
 
 class LLMClient:
-    def __init__(self, api_url: str, api_token: Optional[str], model_name: str, http_session: httpx.AsyncClient, user_verification_schema_path: str, role_categorization_schema_path: str):
+    def __init__(self, api_url: str, api_token: Optional[str], model_name: str, http_session: httpx.AsyncClient, user_verification_schema_path: str, role_categorization_schema_path: str, request_timeout_seconds: Optional[int] = None):
         self.api_url = api_url.rstrip('/')
         self.api_token = api_token
         self.model_name = model_name
         self.http_session = http_session
+        # per-request timeout to use when calling the LLM API (overrides session timeout per-call)
+        self.request_timeout_seconds = request_timeout_seconds
         self.user_verification_schema = self._load_json_schema(user_verification_schema_path)
         self.role_categorization_schema = self._load_json_schema(role_categorization_schema_path)
         logger.info(f"LLMClient initialized for model '{self.model_name}' at URL '{self.api_url}'")
+        # lightweight runtime metrics
+        self.metrics: Dict[str, Any] = {
+            'calls': 0,
+            'truncated_responses': 0,
+            'total_estimated_prompt_tokens': 0,
+            'total_chars_sent': 0,
+            'last_call_duration_s': None,
+        }
+        # default tunables (can be overridden by callers)
+        self.default_max_tokens = 2048
 
     def _load_json_schema(self, schema_path: str) -> Optional[Dict[str, Any]]:
         try:
@@ -49,7 +62,7 @@ class LLMClient:
     async def _make_llm_request(self,
                                 messages: List[Dict[str, str]],
                                 temperature: float = 0.5,
-                                max_tokens: int = 1536,
+                                max_tokens: Optional[int] = None,
                                 functions: Optional[List[Dict[str, Any]]] = None,
                                 function_call: Optional[Dict[str, Any]] = None
                                ) -> Optional[Dict[str, Any]]:
@@ -68,7 +81,7 @@ class LLMClient:
             "model": self.model_name,
             "messages": messages,
             "temperature": final_temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens or self.default_max_tokens,
         }
 
         if functions:
@@ -77,14 +90,63 @@ class LLMClient:
             payload["function_call"] = function_call
 
         request_url = self.api_url
+        # Lightweight metrics: estimate prompt size (chars and rough token count)
+        try:
+            messages_text = "\n".join([m.get('content', '') for m in messages if isinstance(m, dict)])
+        except Exception:
+            messages_text = ''
+        chars = len(messages_text)
+        est_tokens = max(1, int(chars / 4))  # rough heuristic: 1 token ~ 4 chars
+        self.metrics['calls'] += 1
+        self.metrics['total_estimated_prompt_tokens'] += est_tokens
+        self.metrics['total_chars_sent'] += chars
+
+        logger.info(
+            f"LLM request -> model={self.model_name} messages={len(messages)} chars={chars} est_tokens~{est_tokens} max_tokens={payload['max_tokens']} functions={len(functions) if functions else 0}"
+        )
         logger.debug(f"Sending LLM request to {request_url} with payload: {json.dumps(payload, indent=2)}")
 
         try:
-            response = await self.http_session.post(request_url, json=payload, headers=headers)
+            # Allow a couple of retry attempts on read/timeouts for slower LLM backends
+            max_attempts = 2
+            backoff_seconds = 0.8
+            response = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    start_time = time.time()
+                    response = await self.http_session.post(request_url, json=payload, headers=headers, timeout=self.request_timeout_seconds)
+                    duration = time.time() - start_time
+                    break
+                except httpx.ReadTimeout as e:
+                    logger.warning(f"LLM request read timeout on attempt {attempt}/{max_attempts}: {e}")
+                    if attempt < max_attempts:
+                        await asyncio.sleep(backoff_seconds * attempt)
+                        continue
+                    raise
+                except httpx.TimeoutException as e:
+                    logger.warning(f"LLM request timed out on attempt {attempt}/{max_attempts}: {e}")
+                    if attempt < max_attempts:
+                        await asyncio.sleep(backoff_seconds * attempt)
+                        continue
+                    raise
+            self.metrics['last_call_duration_s'] = duration
+
             logger.debug(f"LLM raw response status: {response.status_code}, headers: {response.headers}")
             response.raise_for_status()
             response_data = response.json()
             logger.debug(f"LLM raw response data (after json()): {json.dumps(response_data, indent=2)}")
+
+            # Inspect finish reason if present and update metrics
+            try:
+                choices = response_data.get('choices') or []
+                if choices and isinstance(choices, list):
+                    finish_reason = choices[0].get('finish_reason')
+                    if finish_reason == 'length':
+                        self.metrics['truncated_responses'] += 1
+                        logger.warning("LLM response was truncated (finish_reason: 'length'). Consider reducing prompt size or increasing max_tokens for final attempts.")
+                    logger.info(f"LLM response finish_reason={finish_reason} duration_s={duration:.2f} est_tokens_sent~{est_tokens}")
+            except Exception:
+                logger.debug("Could not parse finish_reason from LLM response.")
 
             if 'message' in response_data and 'content' in response_data['message']:
                 pass
@@ -95,6 +157,8 @@ class LLMClient:
                 logger.error(f"LLM response missing expected content structure. Response: {response_data}")
                 return None
             return response_data
+        except httpx.ReadTimeout as e:
+            logger.error(f"LLM API request read timed out after {self.request_timeout_seconds}s: {e}", exc_info=True)
         except httpx.HTTPStatusError as e:
             logger.error(f"LLM API request failed with status {e.response.status_code}: {e.response.text}", exc_info=True)
         except httpx.TimeoutException as e:
@@ -173,7 +237,7 @@ class LLMClient:
         llm_response_data = await self._make_llm_request(
             messages,
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=self.default_max_tokens,
             functions=[self.role_categorization_schema],
             function_call={"name": "categorize_server_roles"}
         )
@@ -221,7 +285,7 @@ class LLMClient:
                                         categorized_server_roles: Dict[str, List[int]],
                                         available_roles_map: Dict[int, str],
                                         verification_prompt_template: str,
-                                       ) -> Optional[LLMVerificationResponse]:
+                                       max_response_tokens: Optional[int] = None) -> Optional[LLMVerificationResponse]:
         logger.info(f"Getting verification guidance from LLM for user message: '{user_message}'")
 
         available_roles_text_parts = []
@@ -256,7 +320,7 @@ class LLMClient:
         llm_response_data = await self._make_llm_request(
             messages,
             temperature=0.3,
-            max_tokens=2048, # Increased max_tokens
+            max_tokens=(max_response_tokens or self.default_max_tokens),
             functions=[self.user_verification_schema],
             function_call={"name": "propose_user_roles"}
         )

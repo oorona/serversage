@@ -114,8 +114,8 @@ class VerificationFlowService:
             return
 
         initial_dm_message = (
-            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems).\n\n"
-            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos)."
+            f"Hello {member.mention}! To begin your verification with **{member.guild.name}**, please tell me about your skills (e.g., Programming Languages, Experience Level, Operating Systems, etc.).\n\n"
+            f"¡Hola {member.mention}! Para comenzar tu verificación con **{member.guild.name}**, por favor cuéntame sobre tus habilidades (ej. Lenguajes de Programación, Nivel de Experiencia, Sistemas Operativos, etc.)."
         )
         
         dm_channel = None
@@ -221,12 +221,26 @@ class VerificationFlowService:
 
                 llm_guidance: Optional[LLMVerificationResponse] = None
                 async with dm_channel.typing():
+                    # Trim conversation history to avoid oversized prompts. Keep system + most recent N messages.
+                    max_msgs = getattr(self.settings, 'LLM_MAX_HISTORY_MESSAGES', 12)
+                    trimmed_history = list(history_for_llm_call)
+                    trimmed_note = None
+                    if len(trimmed_history) > max_msgs:
+                        # Keep the first system/assistant message and the last (max_msgs-1) messages
+                        head = trimmed_history[:1]
+                        tail = trimmed_history[-(max_msgs-1):]
+                        trimmed_history = head + tail
+                        trimmed_note = "[System Note for LLM: Earlier parts of the conversation were omitted for brevity.]"
+                        # insert the trimmed note as an assistant message before the user's current message
+                        trimmed_history.append({'role': 'assistant', 'content': trimmed_note})
+
                     llm_guidance = await self.llm_client.get_verification_guidance(
                         user_message=llm_turn_user_content,
-                        conversation_history=history_for_llm_call,
+                        conversation_history=trimmed_history,
                         categorized_server_roles=self.bot.categorized_server_roles,
                         available_roles_map=self.bot.server_roles_map,
-                        verification_prompt_template=verification_prompt_template
+                        verification_prompt_template=verification_prompt_template,
+                        max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None)
                     )
 
                 if not llm_guidance: 

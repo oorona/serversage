@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     VERIFICATION_RETRIES: PositiveInt = 3
     REBUILD_ROLE_CATEGORIES_ON_STARTUP: bool = False
 
+    # LLM tuning: max tokens to request for generation and how much conversation history to keep
+    LLM_MAX_RESPONSE_TOKENS: PositiveInt = 3072
+    LLM_MAX_HISTORY_MESSAGES: PositiveInt = 8
+    # HTTP timeout (seconds) for LLM API calls (can be increased for slower local LLMs)
+    LLM_HTTP_TIMEOUT_SECONDS: PositiveInt = 120
+
     # Logging Configuration
     LOG_LEVEL: str = "INFO"
 
@@ -52,6 +58,9 @@ class Settings(BaseSettings):
     CATEGORIZED_ROLES_FILE: str = "data/categorized_roles.json"
     USER_VERIFICATION_SCHEMA_PATH: str = "llm_integration/schemas/user_verification.json"
     ROLE_CATEGORIZATION_SCHEMA_PATH: str = "llm_integration/schemas/role_categorization.json"
+    # Role hierarchy boundary (optional). If set, only roles below this role will be considered for
+    # automatic categorization. Specify the numeric role ID via env. Name-based resolution is not used.
+    HIERARCHY_BOUNDARY_ROLE_ID: Optional[PositiveInt] = None
 
     PARSED_ADMIN_ROLE_IDS: List[int] = []
 

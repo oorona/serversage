@@ -24,7 +24,15 @@ class UserCommandsCog(commands.Cog, name="UserCommands"):
         logger.info(f"User command '/assign-roles' used by {interaction.user.name} (ID: {interaction.user.id})")
         
         # Acknowledge the interaction immediately so it doesn't time out.
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        # Be defensive: interaction tokens can expire or already be acknowledged which raises NotFound.
+        deferred_successfully = False
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True, thinking=True)
+            deferred_successfully = True
+        except Exception as e:
+            logger.warning(f"Could not defer interaction for /assign-roles: {e}. Falling back to DM-only flow.")
+            deferred_successfully = False
         # --- MODIFICATION END ---
 
         if not interaction.guild:
@@ -38,8 +46,15 @@ class UserCommandsCog(commands.Cog, name="UserCommands"):
             return
 
         if self.verification_service:
-            # The service will now also use followup messages.
-            await self.verification_service.start_verification_process(interaction.user, interaction)
+            # If we successfully deferred above, pass the interaction so the service can use followups.
+            # If deferral failed, call without interaction so the service uses DMs only and avoids followup errors.
+            try:
+                if deferred_successfully:
+                    await self.verification_service.start_verification_process(interaction.user, interaction)
+                else:
+                    await self.verification_service.start_verification_process(interaction.user, None)
+            except Exception as e:
+                logger.error(f"Error starting verification service from /assign-roles: {e}", exc_info=True)
         else:
             logger.error("Verification service not available for '/assign-roles'.")
             # Use followup

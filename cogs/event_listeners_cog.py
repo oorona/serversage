@@ -5,6 +5,7 @@ from discord.ext import commands, tasks
 import logging
 import json
 import os
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +17,8 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
         self.verification_service = bot.verification_service
         
         # These will be populated in on_ready
-        self.bot.categorized_server_roles: Dict[str, List[int]] = {} 
-        self.bot.server_roles_map: Dict[int, str] = {} # role_id -> role_name
+        self.bot.categorized_server_roles = {}
+        self.bot.server_roles_map = {} # role_id -> role_name
 
     async def _load_prompt(self, file_path: str) -> str:
         """Loads a prompt from a file."""
@@ -61,7 +62,7 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
         Updates the bot.server_roles_map from bot.categorized_server_roles.
         This map (role_id -> role_name) is useful for constructing prompts for the LLM.
         """
-        temp_map: Dict[int, str] = {}
+        temp_map = {}
         if not self.bot.guilds:
             logger.warning("Cannot update server_roles_map: Bot is not in any guilds yet.")
             return
@@ -121,10 +122,31 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
             else: # not loaded_from_file implies it's the first run or file was missing/corrupt
                 logger.info(f"Categorized roles file not loaded. Proceeding with LLM categorization for guild: {guild.name}")
 
+            # Optionally filter roles by a hierarchy boundary configured in settings.
+            boundary_role = None
+            if getattr(self.settings, 'HIERARCHY_BOUNDARY_ROLE_ID', None):
+                try:
+                    boundary_role = guild.get_role(self.settings.HIERARCHY_BOUNDARY_ROLE_ID)
+                except Exception:
+                    boundary_role = None
+
             roles_to_categorize_data = []
             for role in guild.roles:
-                if not role.is_default() and not role.managed and not role.is_bot_managed() and not role.is_integration() and not role.is_premium_subscriber():
-                    roles_to_categorize_data.append({"id": role.id, "name": role.name})
+                # skip system/managed roles as before
+                if role.is_default() or role.managed or role.is_bot_managed() or role.is_integration() or role.is_premium_subscriber():
+                    continue
+
+                # If a boundary role is configured and found, only include roles below it in the role hierarchy
+                if boundary_role is not None:
+                    try:
+                        # In discord.py, higher 'position' means higher in the list; we want roles with lower position
+                        if role.position >= boundary_role.position:
+                            continue
+                    except Exception:
+                        # If attribute missing or unexpected, skip the special filtering
+                        pass
+
+                roles_to_categorize_data.append({"id": role.id, "name": role.name})
             
             if not roles_to_categorize_data:
                 logger.info("No user-manageable roles suitable for categorization found.")
