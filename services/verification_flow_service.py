@@ -388,14 +388,49 @@ class VerificationFlowService:
                     logger.error(f"SVC_CONCLUDE: Failed to load new user summary prompt: {e}")
                 
                 if summary_prompt_template and self.llm_client:
-                    conv_history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_history_for_summary])
+                    # Trim conversation history to avoid oversized prompts causing truncated LLM responses.
+                    max_history_msgs = getattr(self.settings, 'LLM_MAX_HISTORY_MESSAGES', 12)
+                    trimmed_history = conversation_history_for_summary
+                    if isinstance(trimmed_history, list) and len(trimmed_history) > max_history_msgs:
+                        # keep the first system/assistant message (if present) and the last (max_history_msgs-1) messages
+                        head = trimmed_history[:1]
+                        tail = trimmed_history[-(max_history_msgs-1):]
+                        trimmed_history = head + tail
+                        # note for transparency (not sent to user) could be included in the prompt if desired
+                    # For summary purposes, include only the user's messages (omit assistant/system messages)
+                    user_only_msgs = [msg for msg in trimmed_history if msg.get('role') == 'user']
+                    if user_only_msgs:
+                        conv_history_text = "\n".join([f"user: {msg['content']}" for msg in user_only_msgs])
+                    else:
+                        # If no user messages are available, log and provide a short placeholder so the LLM prompt is not empty
+                        logger.debug(f"SVC_CONCLUDE: No user messages found in trimmed conversation for {member.name}. Using placeholder in summary prompt.")
+                        conv_history_text = "(No user messages captured from the conversation.)"
+                    # Truncate conversation text to a safe character limit before calling the LLM
+                    max_summary_chars = getattr(self.settings, 'LLM_SUMMARY_MAX_CHARS', 1800)
+                    conv_history_text_to_send = conv_history_text
+                    if isinstance(conv_history_text, str) and len(conv_history_text) > max_summary_chars:
+                        # Keep the tail (most recent user content) for context
+                        conv_history_text_to_send = "...(truncated)...\n" + conv_history_text[-max_summary_chars:]
+                        logger.debug(f"SVC_CONCLUDE: Conversation history truncated to {max_summary_chars} chars for summary for {member.name}.")
+
                     llm_summary = await self.llm_client.generate_new_user_summary(
-                        conversation_history_text=conv_history_text,
+                        conversation_history_text=conv_history_text_to_send,
                         assigned_roles_names_str=", ".join(final_assigned_skill_role_names),
                         summary_prompt_template=summary_prompt_template,
-                        conversation_language="English"
+                        conversation_language="English",
+                        max_response_tokens=getattr(self.settings, 'LLM_MAX_RESPONSE_TOKENS', None)
                     )
                     admin_notification_message = llm_summary if llm_summary else "LLM summary generation failed."
+                    # Fire-and-forget suspicious analysis: collect user messages and schedule async analysis
+                    try:
+                        suspicious_service = getattr(self.bot, 'suspicious_account_service', None)
+                        if suspicious_service:
+                            # collect user-only messages from the conversation history
+                            user_msgs = [m['content'] for m in conversation_history_for_summary if m.get('role') == 'user']
+                            # schedule background task so we don't block the conclude flow
+                            asyncio.create_task(suspicious_service.analyze_and_mark(member.guild, member, user_msgs, self.settings.PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE if hasattr(self.settings, 'PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE') else ""))
+                    except Exception as e:
+                        logger.error(f"Failed to schedule suspicious account analysis for {member.name}: {e}", exc_info=True)
                 else:
                     admin_notification_message = f"User successfully verified.\nAssigned roles: {', '.join(final_assigned_skill_role_names)}.\n(LLM summary prompt missing or LLM client error)"
             else:

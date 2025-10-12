@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # HTTP timeout (seconds) for LLM API calls (can be increased for slower local LLMs)
     LLM_HTTP_TIMEOUT_SECONDS: PositiveInt = 120
 
+    # Suspicious account / moderation settings
+    SUSPICIOUS_ROLE_ID: Optional[PositiveInt] = 1426422431886741545
+    SUSPICIOUS_CHECK_INTERVAL_HOURS: PositiveInt = 24
+    SUSPICIOUS_ROLE_RETENTION_DAYS: PositiveInt = 7
+    LLM_SUMMARY_MAX_CHARS: PositiveInt = 1800
+
     # Logging Configuration
     LOG_LEVEL: str = "INFO"
 
@@ -55,6 +61,7 @@ class Settings(BaseSettings):
     PROMPT_PATH_USER_VERIFICATION_SYSTEM_TEMPLATE: str = "prompts/user_verification/system_template.txt"
     PROMPT_PATH_CHANNEL_WELCOME_SYSTEM_TEMPLATE: str = "prompts/welcome_message/system_template.txt"
     PROMPT_PATH_NEW_USER_SUMMARY_SYSTEM_TEMPLATE: str = "prompts/new_user_summary/system_template.txt"
+    PROMPT_PATH_SUSPICIOUS_ANALYSIS_SYSTEM_TEMPLATE: str = "prompts/suspicious_analysis/system_template.txt"
     CATEGORIZED_ROLES_FILE: str = "data/categorized_roles.json"
     USER_VERIFICATION_SCHEMA_PATH: str = "llm_integration/schemas/user_verification.json"
     ROLE_CATEGORIZATION_SCHEMA_PATH: str = "llm_integration/schemas/role_categorization.json"

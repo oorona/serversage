@@ -2,6 +2,7 @@
 
 import discord
 from discord.ext import commands, tasks
+import asyncio
 import logging
 import json
 import os
@@ -130,23 +131,64 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
                 except Exception:
                     boundary_role = None
 
-            roles_to_categorize_data = []
+            # If a boundary was configured but not found in this guild, abort categorization to avoid sending all roles.
+            if getattr(self.settings, 'HIERARCHY_BOUNDARY_ROLE_ID', None) and boundary_role is None:
+                logger.warning(f"HIERARCHY_BOUNDARY_ROLE_ID is set ({self.settings.HIERARCHY_BOUNDARY_ROLE_ID}) but the role was not found in guild {guild.name}. Aborting categorization to avoid sending all roles.")
+                # Ensure categorized_roles file remains untouched if it existed; return early
+                if not loaded_from_file:
+                    self.bot.categorized_server_roles = {}
+                    await self._save_categorized_roles_to_file()
+                return
+
+            # Diagnostic logging: report boundary role and positions to help debug filtering
+            try:
+                if boundary_role:
+                    logger.info(f"Role categorization boundary role resolved: '{boundary_role.name}' (ID: {boundary_role.id}) with position={boundary_role.position}")
+                else:
+                    logger.info("No HIERARCHY_BOUNDARY_ROLE_ID configured; will consider all non-system roles for categorization.")
+            except Exception:
+                logger.debug("Could not log boundary role details.")
+
+            # Build candidate roles list (skip system/managed roles)
+            candidate_roles = []
             for role in guild.roles:
-                # skip system/managed roles as before
                 if role.is_default() or role.managed or role.is_bot_managed() or role.is_integration() or role.is_premium_subscriber():
                     continue
+                candidate_roles.append(role)
 
-                # If a boundary role is configured and found, only include roles below it in the role hierarchy
-                if boundary_role is not None:
-                    try:
-                        # In discord.py, higher 'position' means higher in the list; we want roles with lower position
-                        if role.position >= boundary_role.position:
-                            continue
-                    except Exception:
-                        # If attribute missing or unexpected, skip the special filtering
-                        pass
+            # If boundary_role is configured, compute roles below it and log them
+            roles_to_categorize_data = []
+            if boundary_role is not None:
+                try:
+                    roles_below = [r for r in candidate_roles if r.position < boundary_role.position]
+                    logger.info(f"Role categorization: boundary role '{boundary_role.name}' (ID: {boundary_role.id}) position={boundary_role.position}")
+                    if roles_below:
+                        # Log full list of roles below the boundary
+                        roles_list_str = "\n".join([f"- {r.name} (ID: {r.id}) pos={r.position}" for r in roles_below])
+                        logger.info(f"Roles below boundary ({len(roles_below)}):\n{roles_list_str}")
+                    else:
+                        logger.info("No roles found below the configured boundary role.")
+                    # Use roles_below for categorization
+                    for role in roles_below:
+                        roles_to_categorize_data.append({"id": role.id, "name": role.name})
+                except Exception:
+                    logger.exception("Error computing roles below boundary role; falling back to candidate roles.")
+                    for role in candidate_roles:
+                        roles_to_categorize_data.append({"id": role.id, "name": role.name})
+            else:
+                # No boundary configured: use all candidate roles
+                for role in candidate_roles:
+                    roles_to_categorize_data.append({"id": role.id, "name": role.name})
 
-                roles_to_categorize_data.append({"id": role.id, "name": role.name})
+            # Log how many roles were collected and show a short sample for debugging
+            try:
+                total_roles_scanned = len([r for r in guild.roles if not (r.is_default() or r.managed or r.is_bot_managed() or r.is_integration() or r.is_premium_subscriber())])
+                logger.info(f"Role categorization: scanned {total_roles_scanned} candidate roles; selected {len(roles_to_categorize_data)} roles for LLM categorization.")
+                if roles_to_categorize_data:
+                    sample = ", ".join([f"{r['name']}({r['id']})" for r in roles_to_categorize_data[:6]])
+                    logger.debug(f"Sample roles sent for categorization: {sample}")
+            except Exception:
+                pass
             
             if not roles_to_categorize_data:
                 logger.info("No user-manageable roles suitable for categorization found.")
@@ -219,7 +261,11 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
                 # Or, queue the member for verification once roles are ready.
                 # For now, we'll proceed, and the verification flow should handle missing role data gracefully.
 
-            await self.verification_service.start_verification_process(member)
+            # Start the verification flow in the background so we don't block sending the welcome message
+            try:
+                asyncio.create_task(self.verification_service.start_verification_process(member))
+            except Exception as e:
+                logger.error(f"Failed to start verification process in background for {member.name}: {e}", exc_info=True)
         else:
             logger.error("VerificationFlowService not available in EventListenersCog for on_member_join.")
 
@@ -236,6 +282,7 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
                         welcome_prompt_template_str=prompt_template
                     )
                     try:
+                        logger.debug(f"Welcome message content (repr) for {member.name}: {repr(welcome_message_content)}")
                         await welcome_channel.send(welcome_message_content)
                         logger.info(f"Sent LLM welcome message for {member.name} to #{welcome_channel.name}")
                     except discord.Forbidden:

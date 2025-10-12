@@ -5,6 +5,7 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 import asyncio
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,67 @@ class AdminCommandsCog(commands.Cog, name="AdminCommands"):
         if event_cog and hasattr(event_cog, 'perform_role_categorization'):
             try:
                 await event_cog.perform_role_categorization(interaction.guild, force_rebuild=True)
-                await interaction.followup.send("Role categorization process has been initiated and forced to rebuild. Check logs for details.", ephemeral=True)
+
+                # Build a readable summary of the categorized roles for the ephemeral response
+                categorized = getattr(self.bot, 'categorized_server_roles', {}) or {}
+                lines = []
+                for cat, ids in categorized.items():
+                    names = []
+                    for rid in ids:
+                        try:
+                            role = interaction.guild.get_role(int(rid))
+                            if role:
+                                names.append(role.name)
+                        except Exception:
+                            continue
+                    if names:
+                        lines.append(f"**{cat}** ({len(names)}): {', '.join(names)}")
+                    else:
+                        lines.append(f"**{cat}**: (no live roles)")
+
+                summary_text = "\n".join(lines) or "No categorized roles found after rebuild."
+
+                # Truncate ephemeral message if too long
+                if len(summary_text) > 1800:
+                    summary_text = summary_text[:1797] + "... (truncated)"
+
+                await interaction.followup.send(content=f"Role categorization complete.\n\n{summary_text}", ephemeral=True)
+
+                # Also send an embed notification to the configured notification channel, if available
+                notif_channel_id = getattr(self.settings, 'NOTIFICATION_CHANNEL_ID', None)
+                if notif_channel_id:
+                    try:
+                        admin_channel = interaction.guild.get_channel(int(notif_channel_id))
+                    except Exception:
+                        admin_channel = None
+
+                    if admin_channel and hasattr(admin_channel, 'send'):
+                        embed = discord.Embed(title="Role categories rebuilt", color=0x3498DB)
+                        embed.description = f"Role categories were rebuilt by {interaction.user.mention}."
+
+                        # Add fields per category, ensuring field value <= 1024 chars
+                        for cat, ids in categorized.items():
+                            names = []
+                            for rid in ids:
+                                try:
+                                    role = interaction.guild.get_role(int(rid))
+                                    if role:
+                                        names.append(role.name)
+                                except Exception:
+                                    continue
+                            value = ", ".join(names) if names else "(no live roles)"
+                            if len(value) > 1000:
+                                value = value[:997] + "..."
+                            embed.add_field(name=cat, value=value, inline=False)
+
+                        try:
+                            await admin_channel.send(embed=embed)
+                        except Exception as e:
+                            logger.error(f"Failed to send role categories embed to notification channel: {e}", exc_info=True)
+                    else:
+                        logger.warning(f"Notification channel ID {notif_channel_id} not found or not sendable in guild {interaction.guild.name}.")
+                else:
+                    logger.info("No NOTIFICATION_CHANNEL_ID configured; skipping admin embed notification.")
             except Exception as e:
                 logger.error(f"Error during rebuild_role_categories command execution: {e}", exc_info=True)
                 await interaction.followup.send(f"An error occurred while rebuilding role categories: {e}", ephemeral=True)

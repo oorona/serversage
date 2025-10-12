@@ -39,6 +39,14 @@
           "type": "string"
         }
       }
+      ,
+      "Other": {
+        "type": "array",
+        "description": "A list of role names that do not fit the main categories and should be classified as Other/Uncategorized.",
+        "items": {
+          "type": "string"
+        }
+      }
     },
     "required": ["Programming_Language", "Experience_Level", "Operating_System", "Tool", "Framework"]
   }

@@ -111,6 +111,8 @@ docker-compose down
 
 Create a .env file in the root of your project with the following variables:
 
+Precedence: environment variables provided to the process override values in `.env`. The values declared in `config.py` act as defaults when no env value is provided.
+
 | Variable                             | Description                                                                                              | Example Value                                    |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | `DISCORD_BOT_TOKEN`                  | Your Discord bot token.                                                                                  | `Mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` |
@@ -128,6 +130,19 @@ Create a .env file in the root of your project with the following variables:
 | `LOG_LEVEL`                          | Logging level for the application (e.g., `INFO`, `DEBUG`, `WARNING`).                                    | `INFO`                                           |
 | `PROMPT_FILE_ROLE_CATEGORIZATION`    | Path to the prompt file used for initial LLM role categorization.                                        | `prompts/role_categorization_prompt.txt`         |
 | `PROMPT_FILE_USER_VERIFICATION`      | Path to the base prompt file for user verification conversations (if applicable).                        | `prompts/user_verification_prompt.txt`           |
+| `SUSPICIOUS_ROLE_ID`                 | Role assigned to accounts flagged as suspicious (optional).                                              | `1426422431886741545`                           |
+| `SUSPICIOUS_CHECK_INTERVAL_HOURS`    | How often (in hours) the background suspicious-check task runs.                                          | `24`                                             |
+| `SUSPICIOUS_ROLE_RETENTION_DAYS`     | How many days to keep the suspicious role before automatic removal (if configured).                       | `7`                                              |
+| `WELCOME_TEMPERATURE`                | Temperature used when generating welcome messages (0.0 - 1.0).                                           | `0.7`                                            |
+| `WELCOME_HARDCODE`                   | If `true`, use the `WELCOME_HARDCODE_MESSAGE` instead of calling the LLM for welcome text (useful for testing). | `false`                                  |
+| `WELCOME_HARDCODE_MESSAGE`           | The static fallback welcome message used when `WELCOME_HARDCODE=true`.                                   | `"Bienvenido..."`                              |
+| `WELCOME_MAX_PROMPT_CHARS`           | Max characters of the welcome system prompt sent to the LLM to avoid truncation.                          | `1200`                                           |
+| `WELCOME_MAX_RESPONSE_TOKENS`        | Max tokens to request from the LLM when generating a welcome message.                                      | `300`                                            |
+| `DEFAULT_MAX_TOKENS`                 | Global default max tokens requested from the LLM when a per-call override isn't provided.                  | `4096`                                           |
+
+Notes on increasing token limits:
+- Raising `DEFAULT_MAX_TOKENS` or per-call max tokens (e.g., `WELCOME_MAX_RESPONSE_TOKENS`) can reduce truncation but will use more model compute and may exceed model or infrastructural limits. Increase cautiously and verify your LLM supports the requested size.
+- If you hit model-imposed limits or cost constraints, prefer trimming prompts (we provide smart-trim) or summarizing role lists instead of unbounded increases.
 
 
 ## Bot Usage / Commands

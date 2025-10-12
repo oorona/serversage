@@ -61,6 +61,16 @@ class VerificationBot(commands.Bot):
         )
         logger.info("VerificationFlowService initialized.")
 
+        # Initialize suspicious account service
+        try:
+            from services.suspicious_account_service import SuspiciousAccountService
+            self.suspicious_account_service = SuspiciousAccountService(bot=self, llm_client=self.llm_client, settings=self.settings)
+            # Start the service background tasks
+            await self.suspicious_account_service.start()
+            logger.info("SuspiciousAccountService initialized and started.")
+        except Exception as e:
+            logger.error(f"Failed to initialize SuspiciousAccountService: {e}", exc_info=True)
+
         # Load cogs
         cog_dir = "cogs"
         logger.info(f"Attempting to load extensions from ./{cog_dir}")

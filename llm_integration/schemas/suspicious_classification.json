@@ -1,0 +1,13 @@
+{
+  "name": "classify_user",
+  "description": "Return a JSON object indicating whether the user is suspicious.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "is_suspicious": { "type": "boolean" },
+      "reason": { "type": "string" },
+      "tags": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["is_suspicious", "reason"]
+  }
+}
