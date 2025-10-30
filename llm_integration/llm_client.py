@@ -577,18 +577,21 @@ class LLMClient:
         }
         return fallback_response_defined
 
-    async def generate_welcome_message(self, member_name: str, server_name: str, member_id: int, welcome_prompt_template_str: str) -> str:
-        logger.info(f"Generating welcome message for '{member_name}' in server '{server_name}'")
+    async def generate_welcome_message(self, member_name: str, server_name: str, member_id: int, welcome_prompt_template_str: str) -> dict:
+        """Generate welcome message as embed data (title, description, color)"""
+        logger.info(f"Generating welcome message embed for '{member_name}' in server '{server_name}'")
 
         # Safely substitute template variables using string.Template to preserve literal braces
         try:
             tmpl = Template(welcome_prompt_template_str)
             system_message_content = tmpl.safe_substitute(server_name=server_name, member_name=member_name, member_id=member_id)
+            logger.debug(f"Template substitution successful. Original template length: {len(welcome_prompt_template_str)}, final length: {len(system_message_content)}")
+            logger.debug(f"Template substituted member_id: {member_id} -> <@{member_id}>")
         except Exception as e:
             logger.error(f"Error formatting welcome prompt template: {e}", exc_info=True)
             system_message_content = (
-                "Eres un asistente amigable. Genera un mensaje breve y entusiasta de bienvenida para un nuevo miembro de Discord. "
-                "Menciónalo por su nombre y sugiere que recibirá un DM para la asignación de roles. Responde en español."
+                "Eres un asistente amigable. Genera contenido JSON para un embed de Discord de bienvenida. "
+                f"Incluye title, description mencionando <@{member_id}>, y color. Responde en español."
             )
 
         # Ensure Spanish output is requested
@@ -598,12 +601,14 @@ class LLMClient:
         except Exception:
             pass
 
-        # Ask the model to include a short Markdown instruction to run /assign-roles
+        # Ask the model to generate embed content (title, description)
         user_message_content = (
-            f"Un nuevo usuario llamado '{member_name}' se ha unido al servidor. Genera un mensaje de bienvenida breve y amistoso mencionándolo con <@{member_id}>. "
-            "Incluye una instrucción breve en Markdown que diga: ejecuta `/assign-roles` para verificar tu cuenta y recibir roles. "
-            "Responde solo con el mensaje, puedes usar Markdown ligero pero no bloques de código."
-        )
+            f"Un nuevo usuario llamado '{member_name}' (ID: {member_id}) se ha unido al servidor. Genera contenido para un embed de Discord de bienvenida:\n"
+            f"1. title: Un título breve y amistoso (máximo 50 caracteres)\n"
+            f"2. description: Mensaje de bienvenida mencionando EXACTAMENTE <@{member_id}> (incluye los símbolos < @ y >) e incluyendo instrucción para ejecutar `/assign-roles` para verificar cuenta y recibir roles (máximo 300 caracteres)\n"
+            f"3. color: Un color hex apropiado para bienvenida (ej: #3498DB para azul)\n"
+            "Responde en español con un objeto JSON válido. IMPORTANTE: Usa exactamente <@{member_id}> para mencionar al usuario."
+        ).format(member_id=member_id)
         # Cap user message size (should be short) to avoid adding large context
         try:
             if len(user_message_content) > 800:
@@ -674,25 +679,62 @@ class LLMClient:
         except Exception:
             logger.debug("Error during welcome generation retry logic; proceeding with initial response.")
 
-        # Spanish fallback if LLM doesn't produce usable content
-        fallback_text = self.welcome_hardcode_message or f"Bienvenido a {server_name}, <@{member_id}>! Estamos encantados de tenerte aquí. Es posible que recibas un DM para ayudarte a asignar algunos roles iniciales."
+        # Spanish fallback embed if LLM doesn't produce usable content
+        fallback_embed = {
+            "title": f"¡Bienvenido a {server_name}!",
+            "description": f"¡Hola <@{member_id}>! Estamos encantados de tenerte aquí. Ejecuta `/assign-roles` para verificar tu cuenta y recibir roles apropiados.",
+            "color": 0x3498DB  # Blue color
+        }
+        if self.welcome_hardcode_message:
+            fallback_embed["description"] = self.welcome_hardcode_message
 
-        # Respect hardcode setting: if configured, return the hardcoded message immediately
+        # Respect hardcode setting: if configured, return the hardcoded embed immediately
         if self.welcome_hardcode:
             logger.info("Using hardcoded welcome message (WELCOME_HARDCODE=true)")
-            return fallback_text
+            return fallback_embed
 
         if llm_response_data:
-            response_content_str: Optional[str] = None
+            embed_data: Optional[dict] = None
             try:
-                # Standard content locations
+                # Standard content locations - try to parse as JSON for embed data
+                response_content_str: Optional[str] = None
                 if "message" in llm_response_data and isinstance(llm_response_data["message"], dict) and "content" in llm_response_data["message"]:
                     response_content_str = llm_response_data["message"]["content"]
                 elif "choices" in llm_response_data and isinstance(llm_response_data.get("choices"), list) and len(llm_response_data["choices"]) > 0 and isinstance(llm_response_data["choices"][0], dict) and "message" in llm_response_data["choices"][0] and isinstance(llm_response_data["choices"][0].get("message"), dict) and "content" in llm_response_data["choices"][0]["message"]:
                     response_content_str = llm_response_data["choices"][0]["message"]["content"]
 
+                # Try to parse content as JSON for embed data
+                if response_content_str and isinstance(response_content_str, str):
+                    stripped = response_content_str.strip()
+                    try:
+                        # Try parsing as JSON first
+                        parsed_json = json.loads(stripped)
+                        if isinstance(parsed_json, dict) and ("title" in parsed_json or "description" in parsed_json):
+                            # Ensure proper user mention format in description
+                            description = parsed_json.get("description", f"¡Hola <@{member_id}>!")
+                            if f"<@{member_id}>" not in description and str(member_id) in description:
+                                # Fix malformed mentions by replacing bare ID with proper mention
+                                description = description.replace(str(member_id), f"<@{member_id}>")
+                                logger.debug(f"Fixed malformed user mention in description")
+                            embed_data = {
+                                "title": parsed_json.get("title", f"¡Bienvenido a {server_name}!"),
+                                "description": description,
+                                "color": self._parse_color(parsed_json.get("color", "#3498DB"))
+                            }
+                    except json.JSONDecodeError:
+                        # If not JSON, treat as plain text description
+                        if stripped:
+                            # Ensure proper mention in plain text response
+                            if f"<@{member_id}>" not in stripped and str(member_id) in stripped:
+                                stripped = stripped.replace(str(member_id), f"<@{member_id}>")
+                            embed_data = {
+                                "title": f"¡Bienvenido a {server_name}!",
+                                "description": stripped[:2000],  # Discord embed description limit
+                                "color": 0x3498DB
+                            }
+
                 # Function-calling style
-                if not response_content_str and "choices" in llm_response_data and isinstance(llm_response_data.get("choices"), list) and len(llm_response_data["choices"]) > 0:
+                if not embed_data and "choices" in llm_response_data and isinstance(llm_response_data.get("choices"), list) and len(llm_response_data["choices"]) > 0:
                     try:
                         choice = llm_response_data["choices"][0]
                         func = choice.get("message", {}).get("function_call") if isinstance(choice.get("message"), dict) else None
@@ -701,35 +743,53 @@ class LLMClient:
                             try:
                                 parsed_args = json.loads(args_str)
                                 if isinstance(parsed_args, dict):
-                                    for k in ("welcome_message", "message", "content", "text"):
-                                        if k in parsed_args and isinstance(parsed_args[k], str):
-                                            response_content_str = parsed_args[k]
-                                            break
-                                    if response_content_str is None:
-                                        response_content_str = json.dumps(parsed_args)
-                                elif isinstance(parsed_args, str):
-                                    response_content_str = parsed_args
+                                    # Ensure proper user mention format in description
+                                    description = parsed_args.get("description", f"¡Hola <@{member_id}>!")
+                                    if f"<@{member_id}>" not in description and str(member_id) in description:
+                                        # Fix malformed mentions by replacing bare ID with proper mention
+                                        description = description.replace(str(member_id), f"<@{member_id}>")
+                                        logger.debug(f"Fixed malformed user mention in function call description")
+                                    embed_data = {
+                                        "title": parsed_args.get("title", f"¡Bienvenido a {server_name}!"),
+                                        "description": description,
+                                        "color": self._parse_color(parsed_args.get("color", "#3498DB"))
+                                    }
                             except json.JSONDecodeError:
-                                response_content_str = args_str
+                                logger.debug("Could not parse function_call arguments as JSON for welcome embed.")
                     except Exception:
-                        logger.debug("No function_call.arguments found or could not parse it for welcome message.")
+                        logger.debug("No function_call.arguments found or could not parse it for welcome embed.")
 
-                if response_content_str and isinstance(response_content_str, str):
-                    stripped = response_content_str.strip()
-                    if stripped:
-                        logger.info("Welcome message generated by LLM.")
-                        logger.debug(f"LLM welcome message (repr): {repr(stripped)}")
-                        return stripped
+                if embed_data and embed_data.get("title") and embed_data.get("description"):
+                    logger.info("Welcome embed generated by LLM.")
+                    logger.debug(f"LLM welcome embed data: {embed_data}")
+                    # Verify the mention format in the description
+                    description = embed_data.get("description", "")
+                    if f"<@{member_id}>" in description:
+                        logger.debug(f"✓ Proper user mention found in description: <@{member_id}>")
                     else:
-                        logger.warning("LLM returned an empty/whitespace welcome message after stripping. Using fallback.")
-                        logger.debug(f"Raw LLM response data for welcome message (empty after strip): {llm_response_data}")
+                        logger.warning(f"⚠ User mention may be malformed in description. Expected: <@{member_id}>, Found in: {repr(description)}")
+                    return embed_data
                 else:
-                    logger.warning(f"LLM response content for welcome message was None or not a string. Data: {llm_response_data}")
+                    logger.warning("LLM returned invalid or incomplete embed data. Using fallback.")
+                    logger.debug(f"Invalid LLM embed data: {embed_data}")
 
             except Exception as e:
-                logger.error(f"Error processing LLM response content for welcome message: {e}", exc_info=True)
-                logger.debug(f"Problematic LLM response data for welcome message: {llm_response_data}")
+                logger.error(f"Error processing LLM response content for welcome embed: {e}", exc_info=True)
+                logger.debug(f"Problematic LLM response data for welcome embed: {llm_response_data}")
 
-        logger.warning("Failed to generate LLM welcome message or content was null/invalid, using fallback.")
-        logger.info(f"Using fallback welcome message: {repr(fallback_text)}")
-        return fallback_text
+        logger.warning("Failed to generate LLM welcome embed or content was null/invalid, using fallback.")
+        logger.info(f"Using fallback welcome embed: {fallback_embed}")
+        return fallback_embed
+
+    def _parse_color(self, color_input) -> int:
+        """Parse color from hex string or return default blue"""
+        try:
+            if isinstance(color_input, str):
+                # Remove # if present and convert hex to int
+                color_str = color_input.lstrip('#')
+                return int(color_str, 16)
+            elif isinstance(color_input, int):
+                return color_input
+        except (ValueError, TypeError):
+            pass
+        return 0x3498DB  # Default blue

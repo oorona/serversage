@@ -269,26 +269,35 @@ class EventListenersCog(commands.Cog, name="EventListeners"):
         else:
             logger.error("VerificationFlowService not available in EventListenersCog for on_member_join.")
 
-        # 2. Send LLM-generated welcome message to a channel
+        # 2. Send LLM-generated welcome message to a channel as an embed
         if self.settings.WELCOME_CHANNEL_ID and self.llm_client:
             welcome_channel = member.guild.get_channel(self.settings.WELCOME_CHANNEL_ID)
             if welcome_channel and isinstance(welcome_channel, discord.TextChannel):
                 prompt_template = await self._load_prompt(self.settings.PROMPT_PATH_CHANNEL_WELCOME_SYSTEM_TEMPLATE)
                 if prompt_template:
-                    welcome_message_content = await self.llm_client.generate_welcome_message(
+                    welcome_embed_data = await self.llm_client.generate_welcome_message(
                         member_name=member.display_name,
                         server_name=member.guild.name,
                         member_id=member.id,
                         welcome_prompt_template_str=prompt_template
                     )
                     try:
-                        logger.debug(f"Welcome message content (repr) for {member.name}: {repr(welcome_message_content)}")
-                        await welcome_channel.send(welcome_message_content)
-                        logger.info(f"Sent LLM welcome message for {member.name} to #{welcome_channel.name}")
+                        logger.debug(f"Welcome embed data for {member.name}: {welcome_embed_data}")
+                        # Create Discord embed from the generated data
+                        embed = discord.Embed(
+                            title=welcome_embed_data.get("title", f"¡Bienvenido a {member.guild.name}!"),
+                            description=welcome_embed_data.get("description", f"¡Hola {member.mention}!"),
+                            color=welcome_embed_data.get("color", 0x3498DB)
+                        )
+                        # Add member avatar as thumbnail if available
+                        if member.avatar:
+                            embed.set_thumbnail(url=member.avatar.url)
+                        await welcome_channel.send(embed=embed)
+                        logger.info(f"Sent LLM welcome embed for {member.name} to #{welcome_channel.name}")
                     except discord.Forbidden:
                         logger.error(f"Missing permissions to send message to welcome channel #{welcome_channel.name}")
                     except Exception as e:
-                        logger.error(f"Failed to send welcome message: {e}", exc_info=True)
+                        logger.error(f"Failed to send welcome embed: {e}", exc_info=True)
                 else:
                     logger.error("Welcome message prompt is empty or failed to load.")
             else:

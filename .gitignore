@@ -95,3 +95,4 @@ celerybeat-schedule
 
 .git
 .github
+secrets/

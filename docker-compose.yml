@@ -31,9 +31,15 @@ services:
 
     networks:
       - intranet
+      - bot
+      - dbnet
 
 networks: 
   intranet:
+    external: true
+  bot:
+    external: true
+  dbnet:
     external: true
 
 # Define the secrets to be used by services
